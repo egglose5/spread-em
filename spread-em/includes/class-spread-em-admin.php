@@ -40,6 +40,7 @@ class SpreadEm_Admin {
 
 		// Add "📊 Spread Em" to the product list bulk-actions dropdown.
 		add_filter( 'bulk_actions-edit-product', [ __CLASS__, 'register_bulk_action' ] );
+		add_action( 'admin_footer-edit.php', [ __CLASS__, 'ensure_bulk_action_is_visible' ] );
 
 		// Handle the bulk action: redirect to the editor with selected IDs.
 		add_filter( 'handle_bulk_actions-edit-product', [ __CLASS__, 'handle_bulk_action' ], 10, 3 );
@@ -125,6 +126,47 @@ class SpreadEm_Admin {
 	}
 
 	/**
+	 * Fallback injector for WooCommerce product screens that do not expose
+	 * custom bulk actions registered through the standard WordPress filter.
+	 */
+	public static function ensure_bulk_action_is_visible(): void {
+		$screen = function_exists( 'get_current_screen' ) ? get_current_screen() : null;
+
+		if ( ! $screen || 'edit-product' !== $screen->id ) {
+			return;
+		}
+
+		$label  = wp_json_encode( __( '📊 Spread Em', 'spread-em' ) );
+		$action = wp_json_encode( self::BULK_ACTION );
+		?>
+		<script>
+			(function () {
+				const actionValue = <?php echo $action; ?>;
+				const actionLabel = <?php echo $label; ?>;
+
+				['action', 'action2'].forEach(function (selectId) {
+					const select = document.getElementById(selectId);
+
+					if (!select) {
+						return;
+					}
+
+					const exists = Array.from(select.options).some(function (option) {
+						return option.value === actionValue;
+					});
+
+					if (exists) {
+						return;
+					}
+
+					select.add(new Option(actionLabel, actionValue));
+				});
+			})();
+		</script>
+		<?php
+	}
+
+	/**
 	 * Handle the "Spread Em" bulk action.
 	 *
 	 * Redirects to the editor page with the selected product IDs encoded in
@@ -160,51 +202,78 @@ class SpreadEm_Admin {
 	 * @param \WP_Query $query The current query object (passed by reference).
 	 */
 	public static function fix_category_filter_includes_children( \WP_Query $query ): void {
-		// Only act on the main admin query for the product list page.
-		if ( ! is_admin() || ! $query->is_main_query() ) {
-			return;
-		}
-
 		global $pagenow;
-		if ( 'edit.php' !== $pagenow ) {
+
+		if (
+			! is_admin() ||
+			! $query->is_main_query() ||
+			'edit.php' !== $pagenow ||
+			'product' !== $query->get( 'post_type' )
+		) {
 			return;
 		}
 
-		// phpcs:disable WordPress.Security.NonceVerification.Recommended
-		$post_type   = isset( $_GET['post_type'] ) ? sanitize_key( $_GET['post_type'] ) : '';
-		$product_cat = isset( $_GET['product_cat'] ) ? sanitize_text_field( wp_unslash( $_GET['product_cat'] ) ) : '';
-		// phpcs:enable WordPress.Security.NonceVerification.Recommended
+		$raw_category = '';
 
-		if ( 'product' !== $post_type || '' === $product_cat ) {
+		if ( isset( $_GET['product_cat'] ) ) { // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+			$raw_category = sanitize_text_field( wp_unslash( $_GET['product_cat'] ) ); // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+		} elseif ( $query->get( 'product_cat' ) ) {
+			$raw_category = sanitize_text_field( (string) $query->get( 'product_cat' ) );
+		}
+
+		if ( '' === $raw_category ) {
 			return;
 		}
 
-		// Look up the term so we can find its children.
-		$term = get_term_by( 'slug', $product_cat, 'product_cat' );
-		if ( ! $term || is_wp_error( $term ) ) {
+		$term = ctype_digit( $raw_category )
+			? get_term_by( 'id', absint( $raw_category ), 'product_cat' )
+			: get_term_by( 'slug', sanitize_title( $raw_category ), 'product_cat' );
+
+		if ( ! $term instanceof \WP_Term ) {
 			return;
 		}
 
-		$child_ids = get_term_children( $term->term_id, 'product_cat' );
-		if ( is_wp_error( $child_ids ) || empty( $child_ids ) ) {
-			// Leaf category or error – WordPress's default query is already correct.
+		$term_ids    = [ (int) $term->term_id ];
+		$descendants = get_term_children( (int) $term->term_id, 'product_cat' );
+
+		if ( ! is_wp_error( $descendants ) && ! empty( $descendants ) ) {
+			$term_ids = array_merge( $term_ids, array_map( 'absint', $descendants ) );
+		}
+
+		$term_ids = array_values( array_unique( array_filter( $term_ids ) ) );
+
+		if ( empty( $term_ids ) ) {
 			return;
 		}
 
-		// Replace the tax_query to cover the parent term and all descendants.
-		$all_term_ids = array_merge( [ $term->term_id ], $child_ids );
+		$existing_tax_query = $query->get( 'tax_query' );
+		$tax_query          = is_array( $existing_tax_query ) ? $existing_tax_query : [];
+
+		$tax_query = array_values(
+			array_filter(
+				$tax_query,
+				static function ( $clause ) {
+					return ! is_array( $clause ) || ! isset( $clause['taxonomy'] ) || 'product_cat' !== $clause['taxonomy'];
+				}
+			)
+		);
 
 		$query->set(
 			'tax_query',
-			[
+			array_merge(
+				$tax_query,
 				[
+					[
 					'taxonomy'         => 'product_cat',
 					'field'            => 'term_id',
-					'terms'            => $all_term_ids,
-					'include_children' => false, // We've already expanded children ourselves.
-				],
-			]
+					'terms'            => $term_ids,
+					'operator'         => 'IN',
+					'include_children' => false,
+					],
+				]
+			)
 		);
+		$query->set( 'product_cat', '' );
 	}
 
 	/**
