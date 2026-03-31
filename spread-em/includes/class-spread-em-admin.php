@@ -9,6 +9,9 @@
  * Also fixes the WC admin product-category filter so that choosing a parent
  * category includes products assigned to any of its descendant categories.
  *
+ * Selection is handled entirely by WooCommerce's existing bulk-actions form.
+ * This plugin adds no custom selection UI.
+ *
  * @package SpreadEm
  */
 
@@ -43,9 +46,6 @@ class SpreadEm_Admin {
 
 		// Fix the category filter so it includes products in sub-categories.
 		add_action( 'pre_get_posts', [ __CLASS__, 'fix_category_filter_includes_children' ] );
-
-		// Show an admin notice when the user reaches the editor without selecting products.
-		add_action( 'admin_notices', [ __CLASS__, 'render_admin_notices' ] );
 	}
 
 	/**
@@ -208,57 +208,15 @@ class SpreadEm_Admin {
 	}
 
 	/**
-	 * Display admin notices injected by Spread Em into the URL.
-	 *
-	 * Currently handles:
-	 *   spread_em_notice=no_selection – user opened the editor without
-	 *   selecting any products in the bulk-actions form first.
-	 */
-	public static function render_admin_notices(): void {
-		// phpcs:ignore WordPress.Security.NonceVerification.Recommended
-		$notice = isset( $_GET['spread_em_notice'] ) ? sanitize_key( $_GET['spread_em_notice'] ) : '';
-
-		if ( 'no_selection' === $notice ) {
-			echo '<div class="notice notice-warning is-dismissible"><p>'
-				. esc_html__( 'Spread Em: Please select at least one product using the checkboxes, then choose "📊 Spread Em" from the Bulk actions dropdown.', 'spread-em' )
-				. '</p></div>';
-		}
-	}
-
-	/**
 	 * Render the full-screen spreadsheet editor page.
-	 *
-	 * Requires at least one product ID to be present in the URL (added by the
-	 * bulk action handler).  If none are found, the user is redirected back to
-	 * the product list with an error notice.
 	 */
 	public static function render_editor_page(): void {
 		if ( ! current_user_can( 'edit_products' ) ) {
 			wp_die( esc_html__( 'You do not have permission to access this page.', 'spread-em' ) );
 		}
-
-		$product_ids = self::get_selected_product_ids();
-
-		if ( empty( $product_ids ) ) {
-			// No products were selected – send the user back with a notice.
-			wp_safe_redirect(
-				add_query_arg(
-					[ 'spread_em_notice' => 'no_selection' ],
-					admin_url( 'edit.php?post_type=product' )
-				)
-			);
-			exit;
-		}
-
-		$count = count( $product_ids );
 		?>
 		<div class="wrap spread-em-wrap">
-			<h1>
-				<?php
-				/* translators: %d: number of products being edited */
-				printf( esc_html( _n( 'Spread Em – Editing %d product', 'Spread Em – Editing %d products', $count, 'spread-em' ) ), (int) $count );
-				?>
-			</h1>
+			<h1><?php esc_html_e( 'Spread Em – Product Editor', 'spread-em' ); ?></h1>
 			<div id="spread-em-toolbar">
 				<a href="<?php echo esc_url( admin_url( 'edit.php?post_type=product' ) ); ?>"
 				   class="button spread-em-back-btn"
