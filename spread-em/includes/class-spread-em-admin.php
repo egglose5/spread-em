@@ -434,7 +434,7 @@ class SpreadEm_Admin {
 			'height'             => $product->get_height(),
 			'categories'         => wp_strip_all_tags( $cats ),
 			'tags'               => implode( ', ', wp_get_post_terms( $product->get_id(), 'product_tag', [ 'fields' => 'names' ] ) ),
-			'attributes'         => '',
+			'attributes'         => self::get_product_attributes_summary( $product ),
 		];
 	}
 
@@ -448,7 +448,15 @@ class SpreadEm_Admin {
 	private static function variation_to_row( \WC_Product_Variation $variation, int $parent_id ): array {
 		$attrs = [];
 		foreach ( $variation->get_attributes() as $attr_name => $attr_value ) {
-			$attrs[] = wc_attribute_label( $attr_name ) . ': ' . $attr_value;
+			$label       = wc_attribute_label( $attr_name );
+			// Taxonomy attribute – get the term label instead of the slug.
+			if ( taxonomy_exists( $attr_name ) && '' !== $attr_value ) {
+				$term = get_term_by( 'slug', $attr_value, $attr_name );
+				if ( $term instanceof \WP_Term ) {
+					$attr_value = $term->name;
+				}
+			}
+			$attrs[] = $label . ': ' . $attr_value;
 		}
 
 		return [
@@ -478,6 +486,43 @@ class SpreadEm_Admin {
 			'tags'               => '',
 			'attributes'         => implode( ' | ', $attrs ),
 		];
+	}
+
+	/**
+	 * Build a human-readable attributes summary for a parent product.
+	 * e.g. "Size: S, M, L | Color: Red, Blue"
+	 *
+	 * @param \WC_Product $product
+	 * @return string
+	 */
+	private static function get_product_attributes_summary( \WC_Product $product ): string {
+		$parts = [];
+
+		foreach ( $product->get_attributes() as $attribute ) {
+			if ( ! $attribute->get_visible() && ! $attribute->get_variation() ) {
+				continue;
+			}
+
+			$label  = wc_attribute_label( $attribute->get_name() );
+			$values = [];
+
+			if ( $attribute->is_taxonomy() ) {
+				$terms = $attribute->get_terms();
+				if ( is_array( $terms ) ) {
+					foreach ( $terms as $term ) {
+						$values[] = $term->name;
+					}
+				}
+			} else {
+				$values = $attribute->get_options();
+			}
+
+			if ( ! empty( $values ) ) {
+				$parts[] = $label . ': ' . implode( ', ', $values );
+			}
+		}
+
+		return implode( ' | ', $parts );
 	}
 
 	/**
