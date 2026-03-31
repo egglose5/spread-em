@@ -272,11 +272,76 @@ class SpreadEm_Ajax {
 			self::apply_attributes_value( $product, (string) $row['attributes'] );
 		}
 
+		if ( array_key_exists( 'custom_meta', $row ) ) {
+			$meta_result = self::apply_custom_meta_json( $product->get_id(), (string) $row['custom_meta'] );
+			if ( is_wp_error( $meta_result ) ) {
+				return $meta_result;
+			}
+		}
+
 		// Persist the product.
 		$result = $product->save();
 
 		if ( ! $result ) {
 			return new \WP_Error( 'save_failed', __( 'Could not save product.', 'spread-em' ) );
+		}
+
+		return true;
+	}
+
+	/**
+	 * Apply custom meta from a JSON object string.
+	 *
+	 * This is two-way sync for non-protected meta keys:
+	 * - keys present in JSON are set/updated
+	 * - existing custom keys missing from JSON are removed
+	 *
+	 * @param int    $product_id Product post ID.
+	 * @param string $raw_json   JSON object string.
+	 * @return true|\WP_Error
+	 */
+	private static function apply_custom_meta_json( int $product_id, string $raw_json ) {
+		$raw_json = trim( $raw_json );
+
+		if ( '' === $raw_json ) {
+			$incoming = [];
+		} else {
+			$incoming = json_decode( $raw_json, true );
+
+			if ( ! is_array( $incoming ) ) {
+				return new \WP_Error( 'custom_meta_invalid_json', __( 'Custom Meta must be valid JSON object syntax.', 'spread-em' ) );
+			}
+		}
+
+		$incoming_keys = [];
+		foreach ( $incoming as $key => $value ) {
+			$meta_key = sanitize_text_field( (string) $key );
+
+			if ( '' === $meta_key || is_protected_meta( $meta_key, 'post' ) ) {
+				continue;
+			}
+
+			$incoming_keys[] = $meta_key;
+
+			if ( null === $value ) {
+				delete_post_meta( $product_id, $meta_key );
+			} else {
+				update_post_meta( $product_id, $meta_key, $value );
+			}
+		}
+
+		$incoming_keys = array_values( array_unique( $incoming_keys ) );
+		$existing_meta = get_post_meta( $product_id );
+
+		foreach ( array_keys( $existing_meta ) as $existing_key ) {
+			$existing_key = (string) $existing_key;
+			if ( '' === $existing_key || is_protected_meta( $existing_key, 'post' ) ) {
+				continue;
+			}
+
+			if ( ! in_array( $existing_key, $incoming_keys, true ) ) {
+				delete_post_meta( $product_id, $existing_key );
+			}
 		}
 
 		return true;

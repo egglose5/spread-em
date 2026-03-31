@@ -463,7 +463,7 @@ class SpreadEm_Admin {
 			'categories'         => wp_strip_all_tags( $cats ),
 			'tags'               => implode( ', ', wp_get_post_terms( $product->get_id(), 'product_tag', [ 'fields' => 'names' ] ) ),
 			'attributes'         => self::get_product_attributes_summary( $product ),
-			'all_meta'           => self::get_all_meta_json( $product->get_id() ),
+			'custom_meta'        => self::get_custom_meta_json( $product->get_id() ),
 		];
 	}
 
@@ -514,21 +514,25 @@ class SpreadEm_Admin {
 			'categories'         => '',
 			'tags'               => '',
 			'attributes'         => implode( ' | ', $attrs ),
-			'all_meta'           => self::get_all_meta_json( $variation->get_id() ),
+			'custom_meta'        => self::get_custom_meta_json( $variation->get_id() ),
 		];
 	}
 
 	/**
-	 * Export all post meta as a JSON string.
+	 * Export custom post meta as a JSON string.
 	 *
 	 * @param int $product_id Product post ID.
 	 * @return string
 	 */
-	private static function get_all_meta_json( int $product_id ): string {
+	private static function get_custom_meta_json( int $product_id ): string {
 		$raw_meta = get_post_meta( $product_id );
 		$meta     = [];
 
 		foreach ( $raw_meta as $key => $values ) {
+			if ( is_protected_meta( (string) $key, 'post' ) ) {
+				continue;
+			}
+
 			$decoded = array_map( 'maybe_unserialize', (array) $values );
 			$meta[ $key ] = ( 1 === count( $decoded ) ) ? $decoded[0] : $decoded;
 		}
@@ -605,7 +609,7 @@ class SpreadEm_Admin {
 			[ 'key' => 'description',        'label' => __( 'Description', 'spread-em' ),         'readonly' => false ],
 			[ 'key' => 'categories',         'label' => __( 'Categories', 'spread-em' ),          'readonly' => false ],
 			[ 'key' => 'tags',               'label' => __( 'Tags', 'spread-em' ),                'readonly' => false ],
-			[ 'key' => 'all_meta',           'label' => __( 'All Meta (JSON)', 'spread-em' ),     'readonly' => true  ],
+			[ 'key' => 'custom_meta',        'label' => __( 'Custom Meta (JSON)', 'spread-em' ),  'readonly' => false ],
 		];
 	}
 }

@@ -178,11 +178,24 @@
 	box-shadow: 0 0 0 2px rgba(34, 113, 177, 0.2);
 }
 
-/* Slightly wider columns for certain field types */
-.spread-em-table td[data-key="name"]             .spread-em-cell-input,
+/* Targeted column widths for practical editing workflow */
+.spread-em-table td[data-key="name"] .spread-em-cell-input {
+	min-width: 180px;
+}
+
+.spread-em-table td[data-key="attributes"] .spread-em-cell-input,
+.spread-em-table td[data-key="attributes"] .spread-em-override-input {
+	min-width: 340px;
+}
+
+.spread-em-table td[data-key="custom_meta"] .spread-em-cell-input,
+.spread-em-table td[data-key="custom_meta"] .spread-em-override-input {
+	min-width: 320px;
+}
+
 .spread-em-table td[data-key="short_description"] .spread-em-cell-input,
-.spread-em-table td[data-key="description"]       .spread-em-cell-input {
-	min-width: 200px;
+.spread-em-table td[data-key="description"] .spread-em-cell-input {
+	min-width: 120px;
 }
 
 /* --------------------------------------------------------------------------
