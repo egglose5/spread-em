@@ -2,7 +2,7 @@
 /**
  * Admin page handler for Spread Em.
  *
- * Registers "📊 Spread Em" as a WooCommerce bulk action on the product list
+ * Registers "🤲 Spread Em" as a WooCommerce bulk action on the product list
  * and provides the standalone spreadsheet editor admin page.  The editor
  * loads only the products that were selected in the bulk action.
  *
@@ -40,7 +40,7 @@ class SpreadEm_Admin {
 		// Enqueue assets only on our editor page.
 		add_action( 'admin_enqueue_scripts', [ __CLASS__, 'enqueue_assets' ] );
 
-		// Add "📊 Spread Em" to the product list bulk-actions dropdown.
+		// Add "🤲 Spread Em" to the product list bulk-actions dropdown.
 		add_filter( 'bulk_actions-edit-product', [ __CLASS__, 'register_bulk_action' ] );
 		add_action( 'admin_footer-edit.php', [ __CLASS__, 'ensure_bulk_action_is_visible' ] );
 
@@ -147,13 +147,13 @@ class SpreadEm_Admin {
 	}
 
 	/**
-	 * Add "📊 Spread Em" to the product list bulk-actions dropdown.
+	 * Add "🤲 Spread Em" to the product list bulk-actions dropdown.
 	 *
 	 * @param array<string, string> $actions Existing bulk actions.
 	 * @return array<string, string>
 	 */
 	public static function register_bulk_action( array $actions ): array {
-		$actions[ self::BULK_ACTION ] = __( '📊 Spread Em', 'spread-em' );
+		$actions[ self::BULK_ACTION ] = __( '🤲 Spread Em', 'spread-em' );
 		return $actions;
 	}
 
@@ -343,6 +343,7 @@ class SpreadEm_Admin {
 				</div>
 				<div id="spread-em-table-wrap" style="display:none;">
 					<table id="spread-em-table" class="spread-em-table">
+						<colgroup id="spread-em-colgroup"></colgroup>
 						<thead id="spread-em-thead"></thead>
 						<tbody id="spread-em-tbody"></tbody>
 					</table>
@@ -387,6 +388,13 @@ class SpreadEm_Admin {
 	 *
 	 * We mirror the fields WooCommerce exports so the editor shows the same
 	 * data as a WC CSV export.
+	 *
+	 * TODO: Add more robust filtering options for the product catalogue so users
+	 * can narrow down the editor view before opening it (or filter within it).
+	 * Potential filters: product status, category, tag, stock status, price range,
+	 * product type (simple/variable), date modified, and free-text search on name/SKU.
+	 * The editor URL could accept additional query params that are applied to
+	 * $query_args here, mirroring the WC admin product list filter experience.
 	 *
 	 * @param array<int> $product_ids  Optional list of product post IDs to include.
 	 * @return array<int, array<string, mixed>>

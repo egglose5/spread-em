@@ -46,6 +46,7 @@
 		currentData  = JSON.parse( JSON.stringify( spreadEmData.products ) );
 
 		buildTable();
+		initColumnLayout();
 
 		$( '#spread-em-loading' ).hide();
 		$( '#spread-em-table-wrap' ).show();
@@ -90,19 +91,52 @@
 	}
 
 	function buildHeader() {
-		const $thead = $( '#spread-em-thead' );
+		const $thead    = $( '#spread-em-thead' );
+		const $colgroup = $( '#spread-em-colgroup' );
 		$thead.empty();
+		$colgroup.empty();
+
+		const savedWidths = loadColumnWidths();
 
 		// Column header row.
 		const $tr = $( '<tr>' );
 		columns.forEach( function ( col ) {
 			const $th = $( '<th>' )
 				.text( col.label )
-				.attr( 'data-key', col.key );
+				.attr( 'data-key', col.key )
+				.css( 'position', 'relative' );
 			if ( col.readonly ) {
 				$th.addClass( 'spread-em-readonly' );
 			}
+
+			// Drag-to-resize handle anchored to the right edge of the header cell.
+			const $handle = $( '<div>' ).addClass( 'spread-em-col-resize-handle' );
+			$handle.on( 'mousedown', function ( e ) {
+				e.preventDefault();
+				const startX = e.pageX;
+				const $col   = $colgroup.find( 'col[data-key="' + col.key + '"]' );
+				const startW = parseInt( $col.css( 'width' ), 10 ) || $th.outerWidth();
+				$( 'body' ).addClass( 'spread-em-col-resizing' );
+				$( document )
+					.on( 'mousemove.colresize', function ( me ) {
+						const newW = Math.max( 40, startW + me.pageX - startX );
+						$col.css( 'width', newW + 'px' );
+					} )
+					.on( 'mouseup.colresize', function () {
+						$( document ).off( '.colresize' );
+						$( 'body' ).removeClass( 'spread-em-col-resizing' );
+						saveColumnWidths();
+					} );
+			} );
+			$th.append( $handle );
 			$tr.append( $th );
+
+			// Matching <col> element – carries the authoritative column width.
+			const $col = $( '<col>' ).attr( 'data-key', col.key );
+			if ( savedWidths[ col.key ] ) {
+				$col.css( 'width', savedWidths[ col.key ] + 'px' );
+			}
+			$colgroup.append( $col );
 		} );
 		$thead.append( $tr );
 
@@ -692,6 +726,76 @@
 		} );
 
 		return changes;
+	}
+
+	/** -----------------------------------------------------------------------
+	 * Column resize helpers
+	 * ---------------------------------------------------------------------- */
+
+	const COL_WIDTHS_KEY = 'spreadEmColWidths';
+
+	/**
+	 * Load persisted column widths from localStorage.
+	 *
+	 * @returns {Object} Map of column key → pixel width.
+	 */
+	function loadColumnWidths() {
+		try {
+			return JSON.parse( localStorage.getItem( COL_WIDTHS_KEY ) || '{}' );
+		} catch ( e ) {
+			return {};
+		}
+	}
+
+	/**
+	 * Persist current <col> widths to localStorage.
+	 */
+	function saveColumnWidths() {
+		const widths = {};
+		$( '#spread-em-colgroup col' ).each( function () {
+			const key = $( this ).attr( 'data-key' );
+			const w   = parseInt( $( this ).css( 'width' ), 10 );
+			if ( key && w > 0 ) {
+				widths[ key ] = w;
+			}
+		} );
+		try {
+			localStorage.setItem( COL_WIDTHS_KEY, JSON.stringify( widths ) );
+		} catch ( e ) {}
+	}
+
+	/**
+	 * Lock the table into fixed layout using the initially rendered widths as
+	 * the baseline (or previously saved widths if the user has already resized).
+	 *
+	 * Called once after the first buildTable() in document.ready.  Subsequent
+	 * buildTable() calls (post-save rebuild) restore from localStorage via
+	 * buildHeader(), so no second call is needed.
+	 */
+	function initColumnLayout() {
+		$( '#spread-em-table' ).css( 'table-layout', 'fixed' );
+
+		if ( ! Object.keys( loadColumnWidths() ).length ) {
+			// First visit – capture rendered widths as the baseline.
+			const measured = {};
+			$( '#spread-em-thead tr:first-child th' ).each( function () {
+				const key = $( this ).attr( 'data-key' );
+				if ( key ) {
+					measured[ key ] = $( this ).outerWidth();
+				}
+			} );
+
+			$( '#spread-em-colgroup col' ).each( function () {
+				const key = $( this ).attr( 'data-key' );
+				if ( measured[ key ] ) {
+					$( this ).css( 'width', measured[ key ] + 'px' );
+				}
+			} );
+
+			try {
+				localStorage.setItem( COL_WIDTHS_KEY, JSON.stringify( measured ) );
+			} catch ( e ) {}
+		}
 	}
 
 	/** -----------------------------------------------------------------------

@@ -300,6 +300,35 @@
 }
 
 /* --------------------------------------------------------------------------
+   Column resize handle
+   -------------------------------------------------------------------------- */
+
+.spread-em-col-resize-handle {
+	position: absolute;
+	top: 0;
+	right: 0;
+	width: 6px;
+	height: 100%;
+	cursor: col-resize;
+	z-index: 1;
+}
+
+.spread-em-col-resize-handle:hover,
+.spread-em-col-resizing .spread-em-col-resize-handle {
+	background: rgba(255, 255, 255, 0.25);
+}
+
+/* Prevent text selection and keep the resize cursor while dragging. */
+body.spread-em-col-resizing {
+	cursor: col-resize !important;
+	user-select: none;
+}
+
+body.spread-em-col-resizing * {
+	cursor: col-resize !important;
+}
+
+/* --------------------------------------------------------------------------
    Responsive tweaks
    -------------------------------------------------------------------------- */
 
