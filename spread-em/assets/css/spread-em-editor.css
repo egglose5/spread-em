@@ -1,0 +1,197 @@
+/**
+ * Spread Em – Spreadsheet Editor Styles
+ *
+ * @package SpreadEm
+ */
+
+/* --------------------------------------------------------------------------
+   Layout – wrapper & toolbar
+   -------------------------------------------------------------------------- */
+
+.spread-em-wrap {
+	padding: 12px 20px;
+	box-sizing: border-box;
+}
+
+#spread-em-toolbar {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	margin: 12px 0 16px;
+	flex-wrap: wrap;
+}
+
+#spread-em-toolbar .button {
+	flex-shrink: 0;
+}
+
+.spread-em-status {
+	font-size: 13px;
+	font-weight: 600;
+	padding: 4px 10px;
+	border-radius: 3px;
+	transition: background 0.2s;
+}
+
+.spread-em-status--success {
+	color: #155724;
+	background: #d4edda;
+	border: 1px solid #c3e6cb;
+}
+
+.spread-em-status--error {
+	color: #721c24;
+	background: #f8d7da;
+	border: 1px solid #f5c6cb;
+	white-space: pre-line; /* show multi-line error messages */
+}
+
+.spread-em-status--info {
+	color: #0c5460;
+	background: #d1ecf1;
+	border: 1px solid #bee5eb;
+}
+
+/* --------------------------------------------------------------------------
+   Loading indicator
+   -------------------------------------------------------------------------- */
+
+.spread-em-loading {
+	padding: 24px;
+	font-size: 15px;
+	color: #666;
+}
+
+/* --------------------------------------------------------------------------
+   Table container – horizontal scroll
+   -------------------------------------------------------------------------- */
+
+#spread-em-table-wrap {
+	overflow-x: auto;
+	-webkit-overflow-scrolling: touch;
+	border: 1px solid #c3c4c7;
+	border-radius: 4px;
+	background: #fff;
+}
+
+/* --------------------------------------------------------------------------
+   Spreadsheet table
+   -------------------------------------------------------------------------- */
+
+.spread-em-table {
+	border-collapse: collapse;
+	width: 100%;
+	min-width: 1200px;
+	font-size: 13px;
+	table-layout: auto;
+}
+
+/* Header */
+.spread-em-table thead tr {
+	position: sticky;
+	top: 0;
+	z-index: 10;
+	background: #1d2327;
+	color: #fff;
+}
+
+.spread-em-table thead th {
+	padding: 9px 10px;
+	text-align: left;
+	font-weight: 600;
+	white-space: nowrap;
+	border-right: 1px solid #3c434a;
+	user-select: none;
+}
+
+.spread-em-table thead th:last-child {
+	border-right: none;
+}
+
+.spread-em-table thead th.spread-em-readonly {
+	background: #2c3338;
+	color: #c3c4c7;
+}
+
+/* Body rows */
+.spread-em-table tbody tr {
+	border-bottom: 1px solid #e2e4e7;
+	transition: background 0.1s;
+}
+
+.spread-em-table tbody tr:nth-child(even) {
+	background: #f6f7f7;
+}
+
+.spread-em-table tbody tr:hover {
+	background: #f0f6fc;
+}
+
+/* Dirty (changed) row highlight */
+.spread-em-table tbody tr.spread-em-dirty {
+	background: #fffbe6;
+}
+
+.spread-em-table tbody tr.spread-em-dirty:hover {
+	background: #fff8d0;
+}
+
+/* Cells */
+.spread-em-table tbody td {
+	padding: 4px 6px;
+	vertical-align: middle;
+	border-right: 1px solid #e2e4e7;
+}
+
+.spread-em-table tbody td:last-child {
+	border-right: none;
+}
+
+.spread-em-table tbody td.spread-em-readonly {
+	color: #555d66;
+	background: #f8f9fa;
+}
+
+/* --------------------------------------------------------------------------
+   Inputs inside cells
+   -------------------------------------------------------------------------- */
+
+.spread-em-cell-input,
+.spread-em-cell-select {
+	width: 100%;
+	min-width: 80px;
+	padding: 4px 6px;
+	font-size: 13px;
+	border: 1px solid transparent;
+	border-radius: 2px;
+	background: transparent;
+	box-sizing: border-box;
+	color: inherit;
+	transition: border-color 0.15s, background 0.15s;
+}
+
+.spread-em-cell-input:focus,
+.spread-em-cell-select:focus {
+	outline: none;
+	border-color: #2271b1;
+	background: #fff;
+	box-shadow: 0 0 0 2px rgba(34, 113, 177, 0.2);
+}
+
+/* Slightly wider columns for certain field types */
+.spread-em-table td[data-key="name"]             .spread-em-cell-input,
+.spread-em-table td[data-key="short_description"] .spread-em-cell-input,
+.spread-em-table td[data-key="description"]       .spread-em-cell-input {
+	min-width: 200px;
+}
+
+/* --------------------------------------------------------------------------
+   Responsive tweaks
+   -------------------------------------------------------------------------- */
+
+@media screen and (max-width: 782px) {
+	#spread-em-toolbar {
+		flex-direction: column;
+		align-items: flex-start;
+	}
+}
