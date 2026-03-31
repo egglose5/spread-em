@@ -188,8 +188,8 @@
 	min-width: 340px;
 }
 
-.spread-em-table td[data-key="custom_meta"] .spread-em-cell-input,
-.spread-em-table td[data-key="custom_meta"] .spread-em-override-input {
+.spread-em-table td[data-key^="meta::"] .spread-em-cell-input,
+.spread-em-table td[data-key^="meta::"] .spread-em-override-input {
 	min-width: 320px;
 }
 

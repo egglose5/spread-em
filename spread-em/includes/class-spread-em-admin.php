@@ -21,6 +21,8 @@ defined( 'ABSPATH' ) || exit;
  * Class SpreadEm_Admin
  */
 class SpreadEm_Admin {
+	/** @var string Prefix used for dynamic custom-meta column keys. */
+	const META_COLUMN_PREFIX = 'meta::';
 
 	/** @var string Slug for the editor admin page. */
 	const PAGE_SLUG = 'spread-em-editor';
@@ -90,6 +92,8 @@ class SpreadEm_Admin {
 		);
 
 		$product_ids = self::get_selected_product_ids();
+		$products    = self::get_products_for_editor( $product_ids );
+		$columns     = self::get_column_definitions( $products );
 
 		wp_localize_script(
 			'spread-em-editor',
@@ -97,8 +101,8 @@ class SpreadEm_Admin {
 			[
 				'ajax_url' => admin_url( 'admin-ajax.php' ),
 				'nonce'    => wp_create_nonce( 'spread_em_nonce' ),
-				'products' => self::get_products_for_editor( $product_ids ),
-				'columns'  => self::get_column_definitions(),
+				'products' => $products,
+				'columns'  => $columns,
 				'taxonomies' => [
 					'categories' => self::get_taxonomy_terms_for_editor( 'product_cat' ),
 					'tags'       => self::get_taxonomy_terms_for_editor( 'product_tag' ),
@@ -422,6 +426,25 @@ class SpreadEm_Admin {
 			}
 		}
 
+		$meta_keys = self::collect_custom_meta_keys( $rows );
+
+		if ( ! empty( $meta_keys ) ) {
+			foreach ( $rows as &$row ) {
+				$meta_map = isset( $row['custom_meta_map'] ) && is_array( $row['custom_meta_map'] )
+					? $row['custom_meta_map']
+					: [];
+
+				foreach ( $meta_keys as $meta_key ) {
+					$row[ self::META_COLUMN_PREFIX . $meta_key ] = array_key_exists( $meta_key, $meta_map )
+						? self::meta_value_to_cell_string( $meta_map[ $meta_key ] )
+						: '';
+				}
+
+				unset( $row['custom_meta_map'] );
+			}
+			unset( $row );
+		}
+
 		return $rows;
 	}
 
@@ -463,7 +486,7 @@ class SpreadEm_Admin {
 			'categories'         => wp_strip_all_tags( $cats ),
 			'tags'               => implode( ', ', wp_get_post_terms( $product->get_id(), 'product_tag', [ 'fields' => 'names' ] ) ),
 			'attributes'         => self::get_product_attributes_summary( $product ),
-			'custom_meta'        => self::get_custom_meta_json( $product->get_id() ),
+			'custom_meta_map'    => self::get_custom_meta_map( $product->get_id() ),
 		];
 	}
 
@@ -514,17 +537,17 @@ class SpreadEm_Admin {
 			'categories'         => '',
 			'tags'               => '',
 			'attributes'         => implode( ' | ', $attrs ),
-			'custom_meta'        => self::get_custom_meta_json( $variation->get_id() ),
+			'custom_meta_map'    => self::get_custom_meta_map( $variation->get_id() ),
 		];
 	}
 
 	/**
-	 * Export custom post meta as a JSON string.
+	 * Export custom post meta as an associative map.
 	 *
 	 * @param int $product_id Product post ID.
-	 * @return string
+	 * @return array<string, mixed>
 	 */
-	private static function get_custom_meta_json( int $product_id ): string {
+	private static function get_custom_meta_map( int $product_id ): array {
 		$raw_meta = get_post_meta( $product_id );
 		$meta     = [];
 
@@ -537,9 +560,70 @@ class SpreadEm_Admin {
 			$meta[ $key ] = ( 1 === count( $decoded ) ) ? $decoded[0] : $decoded;
 		}
 
-		$json = wp_json_encode( $meta );
+		return $meta;
+	}
 
-		return is_string( $json ) ? $json : '{}';
+	/**
+	 * Collect all custom meta keys present in row maps.
+	 *
+	 * @param array<int, array<string, mixed>> $rows
+	 * @return array<int, string>
+	 */
+	private static function collect_custom_meta_keys( array $rows ): array {
+		$keys = [];
+
+		foreach ( $rows as $row ) {
+			if ( empty( $row['custom_meta_map'] ) || ! is_array( $row['custom_meta_map'] ) ) {
+				continue;
+			}
+
+			$keys = array_merge( $keys, array_keys( $row['custom_meta_map'] ) );
+		}
+
+		$keys = array_values( array_unique( array_map( 'strval', $keys ) ) );
+
+		natcasesort( $keys );
+
+		return array_values( $keys );
+	}
+
+	/**
+	 * Convert a meta value to a spreadsheet cell string.
+	 *
+	 * @param mixed $value
+	 * @return string
+	 */
+	private static function meta_value_to_cell_string( $value ): string {
+		if ( is_array( $value ) || is_object( $value ) ) {
+			$json = wp_json_encode( $value );
+			return is_string( $json ) ? $json : '';
+		}
+
+		if ( is_bool( $value ) ) {
+			return $value ? '1' : '0';
+		}
+
+		if ( null === $value ) {
+			return '';
+		}
+
+		return (string) $value;
+	}
+
+	/**
+	 * Get raw custom meta key from a dynamic column key.
+	 *
+	 * @param string $column_key Spreadsheet column key.
+	 * @return string|null
+	 */
+	public static function get_meta_key_from_column_key( string $column_key ): ?string {
+		if ( 0 !== strpos( $column_key, self::META_COLUMN_PREFIX ) ) {
+			return null;
+		}
+
+		$meta_key = substr( $column_key, strlen( self::META_COLUMN_PREFIX ) );
+
+		return '' === $meta_key ? null : $meta_key;
 	}
 
 	/**
@@ -584,8 +668,8 @@ class SpreadEm_Admin {
 	 *
 	 * @return array<int, array<string, mixed>>
 	 */
-	public static function get_column_definitions(): array {
-		return [
+	public static function get_column_definitions( array $rows = [] ): array {
+		$columns = [
 			[ 'key' => 'id',                 'label' => __( 'ID', 'spread-em' ),                  'readonly' => true  ],
 			[ 'key' => 'name',               'label' => __( 'Name', 'spread-em' ),                'readonly' => false ],
 			[ 'key' => 'sku',                'label' => __( 'SKU', 'spread-em' ),                 'readonly' => false ],
@@ -609,7 +693,30 @@ class SpreadEm_Admin {
 			[ 'key' => 'description',        'label' => __( 'Description', 'spread-em' ),         'readonly' => false ],
 			[ 'key' => 'categories',         'label' => __( 'Categories', 'spread-em' ),          'readonly' => false ],
 			[ 'key' => 'tags',               'label' => __( 'Tags', 'spread-em' ),                'readonly' => false ],
-			[ 'key' => 'custom_meta',        'label' => __( 'Custom Meta (JSON)', 'spread-em' ),  'readonly' => false ],
 		];
+
+		$meta_keys = [];
+
+		foreach ( $rows as $row ) {
+			foreach ( array_keys( $row ) as $key ) {
+				$meta_key = self::get_meta_key_from_column_key( (string) $key );
+				if ( null !== $meta_key ) {
+					$meta_keys[] = $meta_key;
+				}
+			}
+		}
+
+		$meta_keys = array_values( array_unique( $meta_keys ) );
+		natcasesort( $meta_keys );
+
+		foreach ( $meta_keys as $meta_key ) {
+			$columns[] = [
+				'key'      => self::META_COLUMN_PREFIX . $meta_key,
+				'label'    => sprintf( __( 'Meta: %s', 'spread-em' ), $meta_key ),
+				'readonly' => false,
+			];
+		}
+
+		return $columns;
 	}
 }
