@@ -99,6 +99,10 @@ class SpreadEm_Admin {
 				'nonce'    => wp_create_nonce( 'spread_em_nonce' ),
 				'products' => self::get_products_for_editor( $product_ids ),
 				'columns'  => self::get_column_definitions(),
+				'taxonomies' => [
+					'categories' => self::get_taxonomy_terms_for_editor( 'product_cat' ),
+					'tags'       => self::get_taxonomy_terms_for_editor( 'product_tag' ),
+				],
 				'i18n'     => [
 					'save'             => __( 'Save All Changes', 'spread-em' ),
 					'undo'             => __( 'Undo Last Change', 'spread-em' ),
@@ -112,6 +116,30 @@ class SpreadEm_Admin {
 				],
 			]
 		);
+	}
+
+	/**
+	 * Return taxonomy term names used by checkbox editors.
+	 *
+	 * @param string $taxonomy Taxonomy slug.
+	 * @return array<int, string>
+	 */
+	private static function get_taxonomy_terms_for_editor( string $taxonomy ): array {
+		$terms = get_terms(
+			[
+				'taxonomy'   => $taxonomy,
+				'hide_empty' => false,
+				'orderby'    => 'name',
+				'order'      => 'ASC',
+				'fields'     => 'names',
+			]
+		);
+
+		if ( is_wp_error( $terms ) || ! is_array( $terms ) ) {
+			return [];
+		}
+
+		return array_values( array_map( 'strval', $terms ) );
 	}
 
 	/**
@@ -435,6 +463,7 @@ class SpreadEm_Admin {
 			'categories'         => wp_strip_all_tags( $cats ),
 			'tags'               => implode( ', ', wp_get_post_terms( $product->get_id(), 'product_tag', [ 'fields' => 'names' ] ) ),
 			'attributes'         => self::get_product_attributes_summary( $product ),
+			'all_meta'           => self::get_all_meta_json( $product->get_id() ),
 		];
 	}
 
@@ -485,7 +514,28 @@ class SpreadEm_Admin {
 			'categories'         => '',
 			'tags'               => '',
 			'attributes'         => implode( ' | ', $attrs ),
+			'all_meta'           => self::get_all_meta_json( $variation->get_id() ),
 		];
+	}
+
+	/**
+	 * Export all post meta as a JSON string.
+	 *
+	 * @param int $product_id Product post ID.
+	 * @return string
+	 */
+	private static function get_all_meta_json( int $product_id ): string {
+		$raw_meta = get_post_meta( $product_id );
+		$meta     = [];
+
+		foreach ( $raw_meta as $key => $values ) {
+			$decoded = array_map( 'maybe_unserialize', (array) $values );
+			$meta[ $key ] = ( 1 === count( $decoded ) ) ? $decoded[0] : $decoded;
+		}
+
+		$json = wp_json_encode( $meta );
+
+		return is_string( $json ) ? $json : '{}';
 	}
 
 	/**
@@ -536,7 +586,7 @@ class SpreadEm_Admin {
 			[ 'key' => 'name',               'label' => __( 'Name', 'spread-em' ),                'readonly' => false ],
 			[ 'key' => 'sku',                'label' => __( 'SKU', 'spread-em' ),                 'readonly' => false ],
 			[ 'key' => 'type',               'label' => __( 'Type', 'spread-em' ),                'readonly' => true  ],
-			[ 'key' => 'attributes',         'label' => __( 'Attributes', 'spread-em' ),          'readonly' => true  ],
+			[ 'key' => 'attributes',         'label' => __( 'Attributes', 'spread-em' ),          'readonly' => false ],
 			[ 'key' => 'status',             'label' => __( 'Status', 'spread-em' ),              'readonly' => false ],
 			[ 'key' => 'catalog_visibility', 'label' => __( 'Visibility', 'spread-em' ),          'readonly' => false ],
 			[ 'key' => 'regular_price',      'label' => __( 'Regular Price', 'spread-em' ),       'readonly' => false ],
@@ -553,8 +603,9 @@ class SpreadEm_Admin {
 			[ 'key' => 'tax_class',          'label' => __( 'Tax Class', 'spread-em' ),           'readonly' => false ],
 			[ 'key' => 'short_description',  'label' => __( 'Short Description', 'spread-em' ),   'readonly' => false ],
 			[ 'key' => 'description',        'label' => __( 'Description', 'spread-em' ),         'readonly' => false ],
-			[ 'key' => 'categories',         'label' => __( 'Categories', 'spread-em' ),          'readonly' => true  ],
-			[ 'key' => 'tags',               'label' => __( 'Tags', 'spread-em' ),                'readonly' => true  ],
+			[ 'key' => 'categories',         'label' => __( 'Categories', 'spread-em' ),          'readonly' => false ],
+			[ 'key' => 'tags',               'label' => __( 'Tags', 'spread-em' ),                'readonly' => false ],
+			[ 'key' => 'all_meta',           'label' => __( 'All Meta (JSON)', 'spread-em' ),     'readonly' => true  ],
 		];
 	}
 }

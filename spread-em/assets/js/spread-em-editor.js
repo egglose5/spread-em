@@ -34,6 +34,9 @@
 	/** Column definitions supplied by the server. */
 	const columns = spreadEmData.columns || [];
 
+	/** Taxonomy option lists for checkbox editors. */
+	const taxonomyOptions = spreadEmData.taxonomies || { categories: [], tags: [] };
+
 	/** -----------------------------------------------------------------------
 	 * Bootstrap
 	 * ---------------------------------------------------------------------- */
@@ -111,6 +114,7 @@
 			if ( ! col.readonly ) {
 				const selectOptions = getSelectOptions( col.key );
 				let $input;
+				let getOverrideValue;
 
 				if ( selectOptions ) {
 					$input = $( '<select>' ).addClass( 'spread-em-override-input' );
@@ -118,34 +122,44 @@
 					selectOptions.forEach( function ( opt ) {
 						$input.append( $( '<option>' ).val( opt.value ).text( opt.label ) );
 					} );
+					getOverrideValue = function () {
+						return String( $input.val() || '' );
+					};
+				} else if ( isTaxonomyColumn( col.key ) ) {
+					const picker = createTaxonomyPicker( col.key, '', 'spread-em-override-input' );
+					$input = picker.$el;
+					getOverrideValue = picker.getValue;
 				} else {
 					$input = $( '<input>' )
 						.attr( { type: 'text', placeholder: 'Override all…' } )
 						.addClass( 'spread-em-override-input' );
+					getOverrideValue = function () {
+						return String( $input.val() || '' );
+					};
 				}
 
 				const $btn = $( '<button>' )
 					.text( '↓' )
 					.attr( 'title', 'Apply to all visible rows' )
 					.addClass( 'spread-em-override-btn' )
-					.on( 'click', ( function ( colKey, $inp ) {
+					.on( 'click', ( function ( colKey, getter ) {
 						return function () {
-							const val = $inp.val();
-							if ( '' === val ) { return; }
+							const val = getter();
+							if ( '' === val && ! isTaxonomyColumn( colKey ) ) { return; }
 							applyColumnOverride( colKey, val );
 						};
-					} )( col.key, $input ) );
+					} )( col.key, getOverrideValue ) );
 
-				// Also apply on Enter key.
-				$input.on( 'keydown', ( function ( colKey, $inp ) {
+				// Also apply on Enter key (text/select inputs).
+				$input.on( 'keydown', ( function ( colKey, getter ) {
 					return function ( e ) {
 						if ( 13 === e.which ) {
-							const val = $inp.val();
-							if ( '' === val ) { return; }
+							const val = getter();
+							if ( '' === val && ! isTaxonomyColumn( colKey ) ) { return; }
 							applyColumnOverride( colKey, val );
 						}
 					};
-				} )( col.key, $input ) );
+				} )( col.key, getOverrideValue ) );
 
 				$td.append( $input ).append( $btn );
 			}
@@ -169,10 +183,13 @@
 			if ( oldVal === String( val ) ) { return; }
 
 			const $cell  = $( this ).find( 'td[data-key="' + colKey + '"]' );
+			const picker = $cell.find( '.spread-em-taxonomy-picker' ).data( 'picker' );
 			const $inp   = $cell.find( 'input.spread-em-cell-input' );
 			const $sel   = $cell.find( 'select.spread-em-cell-select' );
 
-			if ( $inp.length ) {
+			if ( picker && typeof picker.setValue === 'function' ) {
+				picker.setValue( String( val ) );
+			} else if ( $inp.length ) {
 				$inp.val( val );
 			} else if ( $sel.length ) {
 				$sel.val( val );
@@ -196,8 +213,14 @@
 			columns.forEach( function ( col ) {
 				const $td = $( '<td>' ).attr( 'data-key', col.key );
 
-				// Variation name and visibility are inherited – show as readonly.
-				const isInherited = product.is_variation && ( 'name' === col.key || 'catalog_visibility' === col.key || 'short_description' === col.key );
+				// Variation fields inherited from parent taxonomy/content are readonly.
+				const isInherited = product.is_variation && (
+					'name' === col.key ||
+					'catalog_visibility' === col.key ||
+					'short_description' === col.key ||
+					'categories' === col.key ||
+					'tags' === col.key
+				);
 
 				if ( col.readonly || isInherited ) {
 					$td.text( product[ col.key ] !== undefined ? product[ col.key ] : '' )
@@ -224,6 +247,32 @@
 	 */
 	function buildCellInput( col, value, rowIndex ) {
 		const currentValue = value !== undefined && value !== null ? String( value ) : '';
+
+		if ( isTaxonomyColumn( col.key ) ) {
+			let trackedValue = currentValue;
+			const picker = createTaxonomyPicker( col.key, currentValue, 'spread-em-cell-input' );
+
+			picker.onSelectionChange( function ( nextVal ) {
+				if ( nextVal !== trackedValue ) {
+					recordChange( rowIndex, col.key, trackedValue, nextVal );
+					trackedValue = nextVal;
+				}
+			} );
+
+			picker.$input.on( 'focus', function () {
+				trackedValue = picker.getValue();
+			} );
+
+			picker.$input.on( 'blur', function () {
+				const newVal = picker.getValue();
+				if ( newVal !== trackedValue ) {
+					recordChange( rowIndex, col.key, trackedValue, newVal );
+					trackedValue = newVal;
+				}
+			} );
+
+			return picker.$el;
+		}
 
 		// Certain columns get a <select> instead of a free-text <input>.
 		const selectOptions = getSelectOptions( col.key );
@@ -324,6 +373,106 @@
 		};
 
 		return maps[ key ] || null;
+	}
+
+	/**
+	 * Check whether a column is taxonomy-based and should use checkbox editor.
+	 *
+	 * @param {string} key Column key.
+	 * @returns {boolean}
+	 */
+	function isTaxonomyColumn( key ) {
+		return 'categories' === key || 'tags' === key;
+	}
+
+	/**
+	 * Build a taxonomy checkbox picker with an editable text representation.
+	 *
+	 * @param {string} key        Column key (categories|tags).
+	 * @param {string} value      Initial CSV value.
+	 * @param {string} inputClass Input class name.
+	 * @returns {{ $el:jQuery, $input:jQuery, getValue:function, setValue:function, onSelectionChange:function }}
+	 */
+	function createTaxonomyPicker( key, value, inputClass ) {
+		const options = Array.isArray( taxonomyOptions[ key ] ) ? taxonomyOptions[ key ] : [];
+		let listeners = [];
+
+		const $wrap = $( '<div>' ).addClass( 'spread-em-taxonomy-picker' );
+		const $input = $( '<input>' )
+			.attr( { type: 'text', value: value } )
+			.addClass( inputClass );
+		const $toggle = $( '<button type="button">' )
+			.addClass( 'spread-em-taxonomy-toggle' )
+			.attr( 'title', 'Select values' )
+			.text( '☑' );
+		const $panel = $( '<div>' ).addClass( 'spread-em-taxonomy-panel' ).hide();
+
+		function parseCsv( raw ) {
+			return String( raw || '' )
+				.split( ',' )
+				.map( function ( item ) { return item.trim(); } )
+				.filter( function ( item ) { return '' !== item; } );
+		}
+
+		function buildPanel( selected ) {
+			$panel.empty();
+			options.forEach( function ( option ) {
+				const checked = selected.indexOf( option ) !== -1;
+				const $label = $( '<label>' ).addClass( 'spread-em-taxonomy-option' );
+				const $cb = $( '<input type="checkbox">' )
+					.val( option )
+					.prop( 'checked', checked )
+					.on( 'change', function () {
+						const next = [];
+						$panel.find( 'input[type="checkbox"]:checked' ).each( function () {
+							next.push( String( $( this ).val() ) );
+						} );
+						const csv = next.join( ', ' );
+						$input.val( csv );
+						listeners.forEach( function ( fn ) { fn( csv ); } );
+					} );
+
+				$label.append( $cb ).append( $( '<span>' ).text( option ) );
+				$panel.append( $label );
+			} );
+		}
+
+		function setValue( csv ) {
+			$input.val( String( csv || '' ) );
+			buildPanel( parseCsv( csv ) );
+		}
+
+		$toggle.on( 'click', function ( e ) {
+			e.preventDefault();
+			$panel.toggle();
+		} );
+
+		$( document ).on( 'click', function ( e ) {
+			if ( ! $wrap.is( e.target ) && 0 === $wrap.has( e.target ).length ) {
+				$panel.hide();
+			}
+		} );
+
+		$input.on( 'input', function () {
+			buildPanel( parseCsv( $input.val() ) );
+		} );
+
+		$wrap.append( $input ).append( $toggle ).append( $panel );
+		setValue( value );
+
+		$wrap.data( 'picker', { setValue: setValue } );
+
+		return {
+			$el: $wrap,
+			$input: $input,
+			getValue: function () {
+				return String( $input.val() || '' );
+			},
+			setValue: setValue,
+			onSelectionChange: function ( fn ) {
+				listeners.push( fn );
+			},
+		};
 	}
 
 	/** -----------------------------------------------------------------------
@@ -457,17 +606,26 @@
 				action : 'spread_em_save',
 				nonce  : spreadEmData.nonce,
 				changes: JSON.stringify( changes ),
+				context_parent_ids: JSON.stringify( getCurrentParentIds() ),
 			},
 		} )
 			.done( function ( response ) {
 				if ( response.success ) {
+					if ( response.data && Array.isArray( response.data.products ) && response.data.products.length ) {
+						currentData = JSON.parse( JSON.stringify( response.data.products ) );
+					}
+
 					// Accept all saved changes into the baseline.
 					originalData = JSON.parse( JSON.stringify( currentData ) );
 					lastChange   = null;
 					isDirty      = false;
 
-					// Remove dirty highlights.
-					$( '#spread-em-tbody tr.spread-em-dirty' ).removeClass( 'spread-em-dirty' );
+					// Rebuild table so inherited variation fields are refreshed.
+					buildTable();
+					if ( $( '#spread-em-hide-parents' ).is( ':checked' ) ) {
+						$( '#spread-em-tbody tr.spread-em-parent-row' ).hide();
+					}
+
 					$( '#spread-em-undo' ).prop( 'disabled', true );
 
 					showStatus( spreadEmData.i18n.saved, 'success' );
@@ -484,6 +642,25 @@
 			.always( function () {
 				$saveBtn.prop( 'disabled', false ).text( spreadEmData.i18n.save );
 			} );
+	}
+
+	/**
+	 * Gather currently loaded parent IDs for post-save refresh context.
+	 *
+	 * @returns {Array<number>}
+	 */
+	function getCurrentParentIds() {
+		const ids = [];
+
+		currentData.forEach( function ( row ) {
+			if ( ! row.is_variation && row.id ) {
+				ids.push( parseInt( row.id, 10 ) );
+			}
+		} );
+
+		return Array.from( new Set( ids.filter( function ( id ) {
+			return ! Number.isNaN( id ) && id > 0;
+		} ) ) );
 	}
 
 	/**
