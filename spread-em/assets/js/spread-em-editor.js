@@ -51,6 +51,11 @@
 		$( '#spread-em-save' ).on( 'click', handleSave );
 		$( '#spread-em-undo' ).on( 'click', handleUndo );
 
+		// Hide/show parent product rows.
+		$( '#spread-em-hide-parents' ).on( 'change', function () {
+			$( '#spread-em-tbody tr.spread-em-parent-row' ).toggle( ! this.checked );
+		} );
+
 		// Warn on leaving with unsaved changes.
 		$( window ).on( 'beforeunload', function ( e ) {
 			if ( isDirty ) {
@@ -85,6 +90,7 @@
 		const $thead = $( '#spread-em-thead' );
 		$thead.empty();
 
+		// Column header row.
 		const $tr = $( '<tr>' );
 		columns.forEach( function ( col ) {
 			const $th = $( '<th>' )
@@ -96,6 +102,86 @@
 			$tr.append( $th );
 		} );
 		$thead.append( $tr );
+
+		// Column override row – input + Apply button per editable column.
+		const $overrideRow = $( '<tr>' ).addClass( 'spread-em-override-row' );
+		columns.forEach( function ( col ) {
+			const $td = $( '<td>' ).attr( 'data-key', col.key );
+
+			if ( ! col.readonly ) {
+				const selectOptions = getSelectOptions( col.key );
+				let $input;
+
+				if ( selectOptions ) {
+					$input = $( '<select>' ).addClass( 'spread-em-override-input' );
+					$input.append( $( '<option>' ).val( '' ).text( '— override —' ) );
+					selectOptions.forEach( function ( opt ) {
+						$input.append( $( '<option>' ).val( opt.value ).text( opt.label ) );
+					} );
+				} else {
+					$input = $( '<input>' )
+						.attr( { type: 'text', placeholder: 'Override all…' } )
+						.addClass( 'spread-em-override-input' );
+				}
+
+				const $btn = $( '<button>' )
+					.text( '↓' )
+					.attr( 'title', 'Apply to all visible rows' )
+					.addClass( 'spread-em-override-btn' )
+					.on( 'click', ( function ( colKey, $inp ) {
+						return function () {
+							const val = $inp.val();
+							if ( '' === val ) { return; }
+							applyColumnOverride( colKey, val );
+						};
+					} )( col.key, $input ) );
+
+				// Also apply on Enter key.
+				$input.on( 'keydown', ( function ( colKey, $inp ) {
+					return function ( e ) {
+						if ( 13 === e.which ) {
+							const val = $inp.val();
+							if ( '' === val ) { return; }
+							applyColumnOverride( colKey, val );
+						}
+					};
+				} )( col.key, $input ) );
+
+				$td.append( $input ).append( $btn );
+			}
+
+			$overrideRow.append( $td );
+		} );
+		$thead.append( $overrideRow );
+	}
+
+	/**
+	 * Apply a single value to every visible row for a given column key.
+	 *
+	 * @param {string} colKey Column key.
+	 * @param {string} val    Value to apply.
+	 */
+	function applyColumnOverride( colKey, val ) {
+		$( '#spread-em-tbody tr:visible' ).each( function () {
+			const rowIndex = parseInt( $( this ).attr( 'data-row' ), 10 );
+			const oldVal   = String( currentData[ rowIndex ][ colKey ] !== undefined ? currentData[ rowIndex ][ colKey ] : '' );
+
+			if ( oldVal === String( val ) ) { return; }
+
+			const $cell  = $( this ).find( 'td[data-key="' + colKey + '"]' );
+			const $inp   = $cell.find( 'input.spread-em-cell-input' );
+			const $sel   = $cell.find( 'select.spread-em-cell-select' );
+
+			if ( $inp.length ) {
+				$inp.val( val );
+			} else if ( $sel.length ) {
+				$sel.val( val );
+			} else {
+				return; // readonly cell – skip
+			}
+
+			recordChange( rowIndex, colKey, oldVal, String( val ) );
+		} );
 	}
 
 	function buildBody() {
@@ -103,12 +189,17 @@
 		$tbody.empty();
 
 		currentData.forEach( function ( product, rowIndex ) {
-			const $tr = $( '<tr>' ).attr( 'data-row', rowIndex );
+			const $tr = $( '<tr>' )
+				.attr( 'data-row', rowIndex )
+				.addClass( product.is_variation ? 'spread-em-variation-row' : 'spread-em-parent-row' );
 
 			columns.forEach( function ( col ) {
 				const $td = $( '<td>' ).attr( 'data-key', col.key );
 
-				if ( col.readonly ) {
+				// Variation name and visibility are inherited – show as readonly.
+				const isInherited = product.is_variation && ( 'name' === col.key || 'catalog_visibility' === col.key || 'short_description' === col.key );
+
+				if ( col.readonly || isInherited ) {
 					$td.text( product[ col.key ] !== undefined ? product[ col.key ] : '' )
 					   .addClass( 'spread-em-readonly' );
 				} else {

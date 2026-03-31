@@ -107,9 +107,10 @@ class SpreadEm_Ajax {
 	 * @return true|\WP_Error
 	 */
 	private static function apply_row_to_product( \WC_Product $product, array $row ) {
-		// --- Sanitise and apply each supported field ---
+		$is_variation = ! empty( $row['is_variation'] );
 
-		if ( array_key_exists( 'name', $row ) ) {
+		// Name and catalog visibility are inherited by variations – skip them.
+		if ( ! $is_variation && array_key_exists( 'name', $row ) ) {
 			$product->set_name( sanitize_text_field( $row['name'] ) );
 		}
 
@@ -129,7 +130,7 @@ class SpreadEm_Ajax {
 			}
 		}
 
-		if ( array_key_exists( 'catalog_visibility', $row ) ) {
+		if ( ! $is_variation && array_key_exists( 'catalog_visibility', $row ) ) {
 			$allowed = [ 'visible', 'catalog', 'search', 'hidden' ];
 			$vis     = sanitize_key( $row['catalog_visibility'] );
 			if ( in_array( $vis, $allowed, true ) ) {

@@ -186,6 +186,65 @@
 }
 
 /* --------------------------------------------------------------------------
+   Column override row
+   -------------------------------------------------------------------------- */
+
+.spread-em-override-row td {
+	background: #e8f0fe;
+	padding: 4px 5px;
+	border-bottom: 2px solid #2271b1;
+}
+
+.spread-em-override-input {
+	width: calc( 100% - 28px );
+	padding: 3px 5px;
+	font-size: 12px;
+	border: 1px solid #aac;
+	border-radius: 2px;
+	box-sizing: border-box;
+}
+
+.spread-em-override-btn {
+	width: 22px;
+	padding: 2px;
+	margin-left: 2px;
+	font-size: 13px;
+	line-height: 1;
+	cursor: pointer;
+	background: #2271b1;
+	color: #fff;
+	border: none;
+	border-radius: 2px;
+	vertical-align: middle;
+}
+
+.spread-em-override-btn:hover {
+	background: #135e96;
+}
+
+/* --------------------------------------------------------------------------
+   Parent / variation row styling
+   -------------------------------------------------------------------------- */
+
+.spread-em-parent-row {
+	font-weight: 500;
+}
+
+.spread-em-variation-row td:first-child {
+	padding-left: 28px;
+}
+
+.spread-em-variation-row {
+	background: #f9fbff;
+	font-size: 12px;
+	color: #444;
+}
+
+.spread-em-variation-row:nth-child(even) {
+	background: #f4f8ff;
+}
+
+/* --------------------------------------------------------------------------
    Responsive tweaks
    -------------------------------------------------------------------------- */
 

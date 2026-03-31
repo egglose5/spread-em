@@ -298,6 +298,10 @@ class SpreadEm_Admin {
 				<button type="button" id="spread-em-save" class="button button-primary">
 					<?php esc_html_e( 'Save All Changes', 'spread-em' ); ?>
 				</button>
+				<label style="display:flex;align-items:center;gap:5px;font-size:13px;">
+					<input type="checkbox" id="spread-em-hide-parents">
+					<?php esc_html_e( 'Hide Parent Products', 'spread-em' ); ?>
+				</label>
 				<span id="spread-em-status" class="spread-em-status" aria-live="polite"></span>
 			</div>
 
@@ -378,6 +382,16 @@ class SpreadEm_Admin {
 			}
 
 			$rows[] = self::product_to_row( $product );
+
+			// If variable, load variations exactly as WC CSV exporter does.
+			if ( 'variable' === $product->get_type() ) {
+				foreach ( $product->get_children( true ) as $variation_id ) {
+					$variation = wc_get_product( $variation_id );
+					if ( $variation instanceof \WC_Product_Variation ) {
+						$rows[] = self::variation_to_row( $variation, $product->get_id() );
+					}
+				}
+			}
 		}
 
 		return $rows;
@@ -397,6 +411,8 @@ class SpreadEm_Admin {
 
 		return [
 			'id'                 => $product->get_id(),
+			'parent_id'          => 0,
+			'is_variation'       => false,
 			'name'               => $product->get_name(),
 			'sku'                => $product->get_sku(),
 			'type'               => $product->get_type(),
@@ -418,6 +434,49 @@ class SpreadEm_Admin {
 			'height'             => $product->get_height(),
 			'categories'         => wp_strip_all_tags( $cats ),
 			'tags'               => implode( ', ', wp_get_post_terms( $product->get_id(), 'product_tag', [ 'fields' => 'names' ] ) ),
+			'attributes'         => '',
+		];
+	}
+
+	/**
+	 * Convert a WC_Product_Variation to a row, mirroring WC CSV exporter format.
+	 *
+	 * @param \WC_Product_Variation $variation
+	 * @param int                   $parent_id
+	 * @return array<string, mixed>
+	 */
+	private static function variation_to_row( \WC_Product_Variation $variation, int $parent_id ): array {
+		$attrs = [];
+		foreach ( $variation->get_attributes() as $attr_name => $attr_value ) {
+			$attrs[] = wc_attribute_label( $attr_name ) . ': ' . $attr_value;
+		}
+
+		return [
+			'id'                 => $variation->get_id(),
+			'parent_id'          => $parent_id,
+			'is_variation'       => true,
+			'name'               => '',
+			'sku'                => $variation->get_sku(),
+			'type'               => 'variation',
+			'status'             => $variation->get_status(),
+			'catalog_visibility' => '',
+			'short_description'  => '',
+			'description'        => $variation->get_description(),
+			'regular_price'      => $variation->get_regular_price(),
+			'sale_price'         => $variation->get_sale_price(),
+			'tax_status'         => $variation->get_tax_status(),
+			'tax_class'          => $variation->get_tax_class(),
+			'stock_status'       => $variation->get_stock_status(),
+			'stock_quantity'     => $variation->get_stock_quantity(),
+			'manage_stock'       => $variation->get_manage_stock() ? 'yes' : 'no',
+			'backorders'         => $variation->get_backorders(),
+			'weight'             => $variation->get_weight(),
+			'length'             => $variation->get_length(),
+			'width'              => $variation->get_width(),
+			'height'             => $variation->get_height(),
+			'categories'         => '',
+			'tags'               => '',
+			'attributes'         => implode( ' | ', $attrs ),
 		];
 	}
 
@@ -432,6 +491,7 @@ class SpreadEm_Admin {
 			[ 'key' => 'name',               'label' => __( 'Name', 'spread-em' ),                'readonly' => false ],
 			[ 'key' => 'sku',                'label' => __( 'SKU', 'spread-em' ),                 'readonly' => false ],
 			[ 'key' => 'type',               'label' => __( 'Type', 'spread-em' ),                'readonly' => true  ],
+			[ 'key' => 'attributes',         'label' => __( 'Attributes', 'spread-em' ),          'readonly' => true  ],
 			[ 'key' => 'status',             'label' => __( 'Status', 'spread-em' ),              'readonly' => false ],
 			[ 'key' => 'catalog_visibility', 'label' => __( 'Visibility', 'spread-em' ),          'readonly' => false ],
 			[ 'key' => 'regular_price',      'label' => __( 'Regular Price', 'spread-em' ),       'readonly' => false ],
