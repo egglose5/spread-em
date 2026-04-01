@@ -342,10 +342,150 @@ body.spread-em-col-resizing * {
 }
 
 /* --------------------------------------------------------------------------
+   Live IM window
+   -------------------------------------------------------------------------- */
+
+.spread-em-im-window {
+	position: fixed;
+	right: 24px;
+	top: 120px;
+	width: 360px;
+	max-width: calc(100vw - 32px);
+	height: 460px;
+	background: #ffffff;
+	border: 1px solid #ccd0d4;
+	box-shadow: 0 16px 40px rgba(0, 0, 0, 0.14);
+	z-index: 100000;
+	display: flex;
+	flex-direction: column;
+	border-radius: 8px;
+	overflow: hidden;
+}
+
+.spread-em-im-header {
+	padding: 14px 16px;
+	background: #1d2327;
+	color: #ffffff;
+	font-size: 14px;
+	font-weight: 600;
+}
+
+.spread-em-im-body {
+	display: flex;
+	min-height: 0;
+	flex: 1;
+}
+
+.spread-em-im-users {
+	width: 120px;
+	border-right: 1px solid #e2e4e7;
+	padding: 12px;
+	background: #f6f7f7;
+	overflow-y: auto;
+}
+
+.spread-em-im-users-title {
+	font-size: 11px;
+	font-weight: 700;
+	letter-spacing: 0.04em;
+	text-transform: uppercase;
+	color: #50575e;
+	margin-bottom: 10px;
+}
+
+.spread-em-im-user {
+	display: block;
+	width: 100%;
+	margin-bottom: 8px;
+	text-align: left;
+	white-space: normal;
+	line-height: 1.35;
+}
+
+.spread-em-im-user--active {
+	background: #2271b1;
+	border-color: #2271b1;
+	color: #ffffff;
+}
+
+.spread-em-im-chat {
+	flex: 1;
+	display: flex;
+	flex-direction: column;
+	min-width: 0;
+}
+
+.spread-em-im-thread {
+	flex: 1;
+	overflow-y: auto;
+	padding: 14px;
+	background: #ffffff;
+}
+
+.spread-em-im-message {
+	margin-bottom: 12px;
+	padding: 10px 12px;
+	background: #f6f7f7;
+	border-radius: 8px;
+	max-width: 88%;
+}
+
+.spread-em-im-message--mine {
+	margin-left: auto;
+	background: #dbeeff;
+}
+
+.spread-em-im-message-author {
+	font-size: 11px;
+	font-weight: 600;
+	color: #50575e;
+	margin-bottom: 4px;
+}
+
+.spread-em-im-message-body {
+	font-size: 13px;
+	line-height: 1.4;
+	color: #1d2327;
+	word-break: break-word;
+}
+
+.spread-em-im-compose {
+	display: flex;
+	gap: 8px;
+	padding: 12px;
+	border-top: 1px solid #e2e4e7;
+	background: #ffffff;
+}
+
+.spread-em-im-input {
+	flex: 1;
+	min-width: 0;
+}
+
+.spread-em-im-empty {
+	font-size: 12px;
+	color: #646970;
+	line-height: 1.4;
+}
+
+/* --------------------------------------------------------------------------
    Responsive tweaks
    -------------------------------------------------------------------------- */
 
 @media screen and (max-width: 782px) {
+	.spread-em-im-window {
+		right: 16px;
+		left: 16px;
+		top: auto;
+		bottom: 16px;
+		width: auto;
+		height: 360px;
+	}
+
+	.spread-em-im-users {
+		width: 108px;
+	}
+
 	#spread-em-toolbar {
 		flex-direction: row;
 		align-items: center;

@@ -26,6 +26,9 @@ class SpreadEm_Admin {
 	/** @var string Prefix used for dynamic custom-meta column keys. */
 	const META_COLUMN_PREFIX = 'meta::';
 
+	/** @var string Shared global live workspace ID. */
+	const LIVE_WORKSPACE_ID = 'spread_em_live_global';
+
 	/** @var string Slug for the editor admin page. */
 	const PAGE_SLUG = 'spread-em-editor';
 
@@ -61,7 +64,7 @@ class SpreadEm_Admin {
 			'',                                     // No parent – hidden from menus.
 			__( 'Spread Em Editor', 'spread-em' ),
 			__( 'Spread Em Editor', 'spread-em' ),
-			'edit_products',
+			SpreadEm_Permissions::CAP_USE_EDITOR,
 			self::PAGE_SLUG,
 			[ __CLASS__, 'render_editor_page' ]
 		);
@@ -93,9 +96,14 @@ class SpreadEm_Admin {
 			true // Load in footer.
 		);
 
-		$product_ids = self::get_selected_product_ids();
-		$products    = self::get_products_for_editor( $product_ids );
+		$full_workspace = self::should_use_full_workspace();
+		$product_ids    = $full_workspace ? [] : self::get_selected_product_ids();
+		$products       = self::get_products_for_editor( $product_ids );
 		$columns     = self::get_column_definitions( $products );
+		$session_id  = self::build_live_session_id( $product_ids, $products );
+		$current_user = wp_get_current_user();
+
+		self::register_live_scope( $products, $full_workspace );
 
 		wp_localize_script(
 			'spread-em-editor',
@@ -105,6 +113,17 @@ class SpreadEm_Admin {
 				'nonce'    => wp_create_nonce( 'spread_em_nonce' ),
 				'products' => $products,
 				'columns'  => $columns,
+				'live'     => [
+					'enabled'       => true,
+					'session_id'    => $session_id,
+					'nonce'         => wp_create_nonce( 'spread_em_live_nonce' ),
+					'poll_interval' => 2500,
+					'full_workspace' => $full_workspace,
+				],
+				'current_user' => [
+					'id'   => get_current_user_id(),
+					'name' => $current_user instanceof \WP_User ? $current_user->display_name : '',
+				],
 				'taxonomies' => [
 					'categories' => self::get_taxonomy_terms_for_editor( 'product_cat' ),
 					'tags'       => self::get_taxonomy_terms_for_editor( 'product_tag' ),
@@ -119,6 +138,17 @@ class SpreadEm_Admin {
 					'confirm_save'     => __( 'Save all pending changes to the database?', 'spread-em' ),
 					'back_to_products' => __( '← Back to Products', 'spread-em' ),
 					'unsaved_changes'  => __( 'You have unsaved changes. Leave anyway?', 'spread-em' ),
+					'fight_for_control' => __( 'Fight for Control', 'spread-em' ),
+					'keep_editing'     => __( 'Keep Editing', 'spread-em' ),
+					'yield_row'        => __( 'Yield Row', 'spread-em' ),
+					'row_contended'    => __( 'Contended', 'spread-em' ),
+					'row_control_message' => __( '%s is also editing this row right now.', 'spread-em' ),
+					'im_title'         => __( 'Instant Message', 'spread-em' ),
+					'im_send'          => __( 'Send', 'spread-em' ),
+					'im_placeholder'   => __( 'Type a message…', 'spread-em' ),
+					'im_active_users'  => __( 'Active users', 'spread-em' ),
+					'im_no_active_users' => __( 'No other active users right now.', 'spread-em' ),
+					'im_open'          => __( 'Open IM', 'spread-em' ),
 				],
 			]
 		);
@@ -314,7 +344,7 @@ class SpreadEm_Admin {
 	 * Render the full-screen spreadsheet editor page.
 	 */
 	public static function render_editor_page(): void {
-		if ( ! current_user_can( 'edit_products' ) ) {
+		if ( ! SpreadEm_Permissions::current_user_can_use_editor() ) {
 			wp_die( esc_html__( 'You do not have permission to access this page.', 'spread-em' ) );
 		}
 		?>
@@ -383,6 +413,87 @@ class SpreadEm_Admin {
 	}
 
 	/**
+	 * Build the shared live workspace ID.
+	 *
+	 * @param array<int>                        $product_ids Selected product IDs from URL.
+	 * @param array<int,array<string,mixed>>    $products    Loaded product rows.
+	 * @return string
+	 */
+	private static function build_live_session_id( array $product_ids, array $products ): string {
+		return self::LIVE_WORKSPACE_ID;
+	}
+
+	/**
+	 * Determine whether the current user explicitly requested full workspace view.
+	 *
+	 * @return bool
+	 */
+	private static function should_use_full_workspace(): bool {
+		if ( ! self::current_user_can_be_global_operator() ) {
+			return false;
+		}
+
+		// phpcs:ignore WordPress.Security.NonceVerification.Recommended
+		$request = isset( $_GET['workspace'] ) ? sanitize_key( wp_unslash( $_GET['workspace'] ) ) : '';
+
+		return 'all' === $request;
+	}
+
+	/**
+	 * Resolve the current user's live collaboration scope mode.
+	 *
+	 * @return string Either "global_operator" or "individual_contributor".
+	 */
+	private static function get_live_scope_mode(): string {
+		return self::should_use_full_workspace() ? 'global_operator' : 'individual_contributor';
+	}
+
+	/**
+	 * Determine whether current user can operate in global workspace mode.
+	 *
+	 * Explicitly supports WooCommerce default operator roles while retaining
+	 * capability fallback for compatibility with custom role setups.
+	 *
+	 * @return bool
+	 */
+	private static function current_user_can_be_global_operator(): bool {
+		return SpreadEm_Permissions::current_user_can_be_global_operator();
+	}
+
+	/**
+	 * Register the current user's allowed live-workspace scope.
+	 *
+	 * @param array<int,array<string,mixed>> $products       Loaded product rows.
+	 * @param bool                           $full_workspace Whether user has full workspace view enabled.
+	 */
+	private static function register_live_scope( array $products, bool $full_workspace ): void {
+		$scope_product_ids = [];
+		$scope_mode        = self::get_live_scope_mode();
+		$full_workspace    = 'global_operator' === $scope_mode;
+
+		foreach ( $products as $product_row ) {
+			if ( ! isset( $product_row['id'] ) ) {
+				continue;
+			}
+
+			$scope_product_ids[] = absint( (int) $product_row['id'] );
+		}
+
+		$scope_product_ids = array_values( array_unique( array_filter( $scope_product_ids ) ) );
+
+		update_user_meta(
+			get_current_user_id(),
+			'spread_em_live_scope',
+			[
+				'scope_mode'     => $scope_mode,
+				'full_workspace' => $full_workspace,
+				'product_ids'    => $scope_product_ids,
+				'updated_at'     => time(),
+			]
+		);
+	}
+
+	/**
 	 * Return products formatted for the spreadsheet editor.
 	 *
 	 * When $product_ids is non-empty only those products are returned;
@@ -402,6 +513,10 @@ class SpreadEm_Admin {
 	 * @return array<int, array<string, mixed>>
 	 */
 	public static function get_products_for_editor( array $product_ids = [] ): array {
+		if ( empty( $product_ids ) && ! self::should_use_full_workspace() ) {
+			return [];
+		}
+
 		$query_args = [
 			'post_type'      => 'product',
 			'post_status'    => 'any',

@@ -43,7 +43,7 @@ class SpreadEm_Log_Page {
 			'woocommerce',
 			__( 'Spread Em Log', 'spread-em' ),
 			__( 'Spread Em Log', 'spread-em' ),
-			'edit_products',
+			SpreadEm_Permissions::CAP_VIEW_LOGS,
 			self::PAGE_SLUG,
 			[ __CLASS__, 'render_page' ]
 		);
@@ -53,7 +53,7 @@ class SpreadEm_Log_Page {
 	 * Render the change-log admin page.
 	 */
 	public static function render_page(): void {
-		if ( ! current_user_can( 'edit_products' ) ) {
+		if ( ! SpreadEm_Permissions::current_user_can_view_logs() ) {
 			wp_die( esc_html__( 'You do not have permission to access this page.', 'spread-em' ) );
 		}
 
@@ -364,7 +364,7 @@ class SpreadEm_Log_Page {
 			wp_send_json_error( [ 'message' => __( 'Security check failed.', 'spread-em' ) ], 403 );
 		}
 
-		if ( ! current_user_can( 'edit_products' ) ) {
+		if ( ! SpreadEm_Permissions::current_user_can_revert_changes() ) {
 			wp_send_json_error( [ 'message' => __( 'You do not have permission to revert changes.', 'spread-em' ) ], 403 );
 		}
 
@@ -431,7 +431,7 @@ class SpreadEm_Log_Page {
 			wp_send_json_error( [ 'message' => __( 'Security check failed.', 'spread-em' ) ], 403 );
 		}
 
-		if ( ! current_user_can( 'edit_products' ) ) {
+		if ( ! SpreadEm_Permissions::current_user_can_revert_changes() ) {
 			wp_send_json_error( [ 'message' => __( 'You do not have permission to revert changes.', 'spread-em' ) ], 403 );
 		}
 

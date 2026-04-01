@@ -68,6 +68,26 @@ The core idea is simple: keep WooCommerce's existing catalogue and product data 
 - **Why this matters** — the spreadsheet editor is launched from the existing WooCommerce product catalogue selection flow, so this change helps parent-category selection behave the way many store owners expect when preparing a bulk edit.
 - **Compatibility implication** — if another plugin depends on the default exact-match-only behavior of the admin `product_cat` filter on the product list screen, test that interaction. Spread'em applies this change only in the admin main product query.
 
+## Permissions Model
+
+Spread'em uses plugin capabilities (not hardcoded role names) so role-builder plugins can assign responsibilities as a drop-in setup.
+
+Capabilities:
+
+- `spread_em_use_editor`
+- `spread_em_live_individual_contributor`
+- `spread_em_live_global_operator`
+- `spread_em_view_logs`
+- `spread_em_revert_changes`
+- `spread_em_send_im`
+
+Default grants:
+
+- `administrator`: all capabilities
+- `shop_manager`: all except `spread_em_live_global_operator`
+
+This mapping is filterable through `spread_em_default_capability_map` for custom deployments.
+
 ---
 
 ## Screenshots

@@ -20,11 +20,26 @@ class SpreadEm_Ajax {
 	/** @var string AJAX action name. */
 	const ACTION = 'spread_em_save';
 
+	/** @var string AJAX action for pushing one live cell update. */
+	const ACTION_LIVE_PUSH = 'spread_em_live_push';
+
+	/** @var string AJAX action for pulling live session state. */
+	const ACTION_LIVE_PULL = 'spread_em_live_pull';
+
+	/** @var string AJAX action for direct live messaging. */
+	const ACTION_LIVE_IM_SEND = 'spread_em_live_im_send';
+
+	/** @var string User meta key containing live workspace scope. */
+	const LIVE_SCOPE_META_KEY = 'spread_em_live_scope';
+
 	/**
 	 * Register AJAX hooks (logged-in users only).
 	 */
 	public static function init(): void {
 		add_action( 'wp_ajax_' . self::ACTION, [ __CLASS__, 'handle_save' ] );
+		add_action( 'wp_ajax_' . self::ACTION_LIVE_PUSH, [ __CLASS__, 'handle_live_push' ] );
+		add_action( 'wp_ajax_' . self::ACTION_LIVE_PULL, [ __CLASS__, 'handle_live_pull' ] );
+		add_action( 'wp_ajax_' . self::ACTION_LIVE_IM_SEND, [ __CLASS__, 'handle_live_im_send' ] );
 	}
 
 	/**
@@ -42,7 +57,7 @@ class SpreadEm_Ajax {
 		}
 
 		// 2. Verify capability.
-		if ( ! current_user_can( 'edit_products' ) ) {
+		if ( ! SpreadEm_Permissions::current_user_can_use_editor() ) {
 			wp_send_json_error( [ 'message' => __( 'You do not have permission to edit products.', 'spread-em' ) ], 403 );
 		}
 
@@ -66,6 +81,13 @@ class SpreadEm_Ajax {
 			}
 
 			$product_id = (int) $row['id'];
+
+			if ( ! self::current_user_can_access_product( $product_id ) ) {
+				/* translators: %d: product ID */
+				$errors[] = sprintf( __( 'You do not have access to edit product %d in this workspace.', 'spread-em' ), $product_id );
+				continue;
+			}
+
 			$product    = wc_get_product( $product_id );
 
 			if ( ! $product ) {
@@ -128,6 +150,477 @@ class SpreadEm_Ajax {
 				'save_state_id'  => $save_state_id,
 			]
 		);
+	}
+
+	/**
+	 * Push one live cell update into the shared session state.
+	 */
+	public static function handle_live_push(): void {
+		if ( ! check_ajax_referer( 'spread_em_live_nonce', 'nonce', false ) ) {
+			wp_send_json_error( [ 'message' => __( 'Security check failed.', 'spread-em' ) ], 403 );
+		}
+
+		if ( ! SpreadEm_Permissions::current_user_can_live_collaborate() ) {
+			wp_send_json_error( [ 'message' => __( 'You do not have permission to edit products.', 'spread-em' ) ], 403 );
+		}
+
+		$session_id = isset( $_POST['session_id'] ) ? sanitize_key( wp_unslash( $_POST['session_id'] ) ) : '';
+		$product_id = isset( $_POST['product_id'] ) ? absint( $_POST['product_id'] ) : 0;
+		$mode       = isset( $_POST['mode'] ) ? sanitize_key( wp_unslash( $_POST['mode'] ) ) : 'update';
+		$key        = isset( $_POST['key'] ) ? (string) wp_unslash( $_POST['key'] ) : '';
+		$value      = isset( $_POST['value'] ) ? (string) wp_unslash( $_POST['value'] ) : '';
+
+		$key = sanitize_text_field( $key );
+
+		if ( '' === $session_id || ! $product_id ) {
+			wp_send_json_error( [ 'message' => __( 'Invalid live update payload.', 'spread-em' ) ], 400 );
+		}
+
+		if ( 'claim' !== $mode && ( '' === $key || 'id' === $key ) ) {
+			wp_send_json_error( [ 'message' => __( 'Invalid live update payload.', 'spread-em' ) ], 400 );
+		}
+
+		if ( ! self::current_user_can_access_product( $product_id ) ) {
+			wp_send_json_error( [ 'message' => __( 'You do not have access to update this product in the live workspace.', 'spread-em' ) ], 403 );
+		}
+
+		$state = self::get_live_state( $session_id );
+
+		if ( ! isset( $state['cells'] ) || ! is_array( $state['cells'] ) ) {
+			$state['cells'] = [];
+		}
+
+		if ( ! isset( $state['row_owners'] ) || ! is_array( $state['row_owners'] ) ) {
+			$state['row_owners'] = [];
+		}
+
+		$state['row_owners'] = self::touch_live_row_owner( $state['row_owners'], $product_id );
+
+		if ( 'claim' !== $mode ) {
+			if ( ! isset( $state['cells'][ $product_id ] ) || ! is_array( $state['cells'][ $product_id ] ) ) {
+				$state['cells'][ $product_id ] = [];
+			}
+
+			$state['cells'][ $product_id ][ $key ] = $value;
+			$state['version'] = isset( $state['version'] ) ? ( (int) $state['version'] + 1 ) : 1;
+		}
+
+		if ( ! isset( $state['version'] ) ) {
+			$state['version'] = 0;
+		}
+		$state['updated_at'] = current_time( 'mysql', true );
+
+		$presence = isset( $state['presence'] ) && is_array( $state['presence'] ) ? $state['presence'] : [];
+		$presence = self::prune_live_presence( $presence );
+		$presence[ get_current_user_id() ] = [
+			'name' => self::get_current_editor_name(),
+			'ts'   => time(),
+		];
+		$state['presence'] = $presence;
+
+		self::save_live_state( $session_id, $state );
+
+		wp_send_json_success( [ 'version' => (int) $state['version'] ] );
+	}
+
+	/**
+	 * Pull shared live session state and heartbeat current user's presence.
+	 */
+	public static function handle_live_pull(): void {
+		if ( ! check_ajax_referer( 'spread_em_live_nonce', 'nonce', false ) ) {
+			wp_send_json_error( [ 'message' => __( 'Security check failed.', 'spread-em' ) ], 403 );
+		}
+
+		if ( ! SpreadEm_Permissions::current_user_can_live_collaborate() ) {
+			wp_send_json_error( [ 'message' => __( 'You do not have permission to edit products.', 'spread-em' ) ], 403 );
+		}
+
+		$session_id = isset( $_POST['session_id'] ) ? sanitize_key( wp_unslash( $_POST['session_id'] ) ) : '';
+		$since      = isset( $_POST['since_version'] ) ? absint( $_POST['since_version'] ) : 0;
+
+		if ( '' === $session_id ) {
+			wp_send_json_error( [ 'message' => __( 'Invalid session ID.', 'spread-em' ) ], 400 );
+		}
+
+		$state = self::get_live_state( $session_id );
+		$state['version'] = isset( $state['version'] ) ? (int) $state['version'] : 0;
+		$state['cells']   = isset( $state['cells'] ) && is_array( $state['cells'] ) ? $state['cells'] : [];
+		$state['cells']   = self::filter_live_cells_for_current_user( $state['cells'] );
+		$state['row_owners'] = isset( $state['row_owners'] ) && is_array( $state['row_owners'] ) ? $state['row_owners'] : [];
+		$state['row_owners'] = self::prune_live_row_owners( $state['row_owners'] );
+		$state['row_owners'] = self::filter_live_row_owners_for_current_user( $state['row_owners'] );
+		$state['direct_messages'] = isset( $state['direct_messages'] ) && is_array( $state['direct_messages'] ) ? $state['direct_messages'] : [];
+		$state['direct_messages'] = self::prune_live_direct_messages( $state['direct_messages'] );
+
+		$presence = isset( $state['presence'] ) && is_array( $state['presence'] ) ? $state['presence'] : [];
+		$presence = self::prune_live_presence( $presence );
+		$presence[ get_current_user_id() ] = [
+			'name' => self::get_current_editor_name(),
+			'ts'   => time(),
+		];
+		$state['presence'] = $presence;
+
+		self::save_live_state( $session_id, $state );
+
+		$has_updates = $state['version'] > $since;
+
+		wp_send_json_success(
+			[
+				'version'     => $state['version'],
+				'has_updates' => $has_updates,
+				'cells'       => $has_updates ? $state['cells'] : [],
+				'row_owners'  => $state['row_owners'],
+				'direct_messages' => self::filter_live_direct_messages_for_current_user( $state['direct_messages'] ),
+				'presence'    => $state['presence'],
+			]
+		);
+	}
+
+	/**
+	 * Send a direct IM to an active user in the live workspace.
+	 */
+	public static function handle_live_im_send(): void {
+		if ( ! check_ajax_referer( 'spread_em_live_nonce', 'nonce', false ) ) {
+			wp_send_json_error( [ 'message' => __( 'Security check failed.', 'spread-em' ) ], 403 );
+		}
+
+		if ( ! SpreadEm_Permissions::current_user_can_send_im() ) {
+			wp_send_json_error( [ 'message' => __( 'You do not have permission to use live messaging.', 'spread-em' ) ], 403 );
+		}
+
+		$session_id = isset( $_POST['session_id'] ) ? sanitize_key( wp_unslash( $_POST['session_id'] ) ) : '';
+		$to_user_id = isset( $_POST['to_user_id'] ) ? absint( $_POST['to_user_id'] ) : 0;
+		$message    = isset( $_POST['message'] ) ? sanitize_textarea_field( wp_unslash( $_POST['message'] ) ) : '';
+
+		if ( '' === $session_id || ! $to_user_id || '' === trim( $message ) ) {
+			wp_send_json_error( [ 'message' => __( 'Invalid direct message payload.', 'spread-em' ) ], 400 );
+		}
+
+		$state = self::get_live_state( $session_id );
+		$presence = isset( $state['presence'] ) && is_array( $state['presence'] ) ? $state['presence'] : [];
+		$presence = self::prune_live_presence( $presence );
+
+		if ( ! isset( $presence[ $to_user_id ] ) ) {
+			wp_send_json_error( [ 'message' => __( 'That user is not currently active in this workspace.', 'spread-em' ) ], 409 );
+		}
+
+		if ( ! isset( $state['direct_messages'] ) || ! is_array( $state['direct_messages'] ) ) {
+			$state['direct_messages'] = [];
+		}
+
+		$state['direct_messages'][] = [
+			'id'           => sanitize_key( wp_generate_uuid4() ),
+			'from_user_id' => get_current_user_id(),
+			'to_user_id'   => $to_user_id,
+			'from_name'    => self::get_current_editor_name(),
+			'message'      => $message,
+			'ts'           => time(),
+		];
+
+		$state['direct_messages'] = self::prune_live_direct_messages( $state['direct_messages'] );
+		$state['presence'] = $presence;
+		self::save_live_state( $session_id, $state );
+
+		wp_send_json_success( [ 'sent' => true ] );
+	}
+
+	/**
+	 * Build transient key for one live session.
+	 *
+	 * @param string $session_id Live session ID.
+	 * @return string
+	 */
+	private static function live_transient_key( string $session_id ): string {
+		return 'spread_em_live_' . $session_id;
+	}
+
+	/**
+	 * Fetch live session state from transient storage.
+	 *
+	 * @param string $session_id Live session ID.
+	 * @return array<string,mixed>
+	 */
+	private static function get_live_state( string $session_id ): array {
+		$state = get_transient( self::live_transient_key( $session_id ) );
+		return is_array( $state ) ? $state : [];
+	}
+
+	/**
+	 * Get current user's allowed live-workspace scope.
+	 *
+	 * @return array<string,mixed>
+	 */
+	private static function get_current_user_live_scope(): array {
+		$scope = get_user_meta( get_current_user_id(), self::LIVE_SCOPE_META_KEY, true );
+		$can_global = self::current_user_can_be_global_operator();
+
+		if ( ! is_array( $scope ) ) {
+			return [
+				'scope_mode'     => 'individual_contributor',
+				'full_workspace' => false,
+				'product_ids'    => [],
+			];
+		}
+
+		$scope_mode = isset( $scope['scope_mode'] ) ? sanitize_key( (string) $scope['scope_mode'] ) : 'individual_contributor';
+		$scope_mode = ( $can_global && 'global_operator' === $scope_mode ) ? 'global_operator' : 'individual_contributor';
+
+		$scope['scope_mode'] = $scope_mode;
+		$scope['full_workspace'] = 'global_operator' === $scope_mode;
+		$scope['product_ids']    = isset( $scope['product_ids'] ) && is_array( $scope['product_ids'] )
+			? array_values( array_unique( array_map( 'absint', $scope['product_ids'] ) ) )
+			: [];
+
+		return $scope;
+	}
+
+	/**
+	 * Determine whether current user can operate in global workspace mode.
+	 *
+	 * Explicitly supports WooCommerce default operator roles while retaining
+	 * capability fallback for compatibility with custom role setups.
+	 *
+	 * @return bool
+	 */
+	private static function current_user_can_be_global_operator(): bool {
+		return SpreadEm_Permissions::current_user_can_be_global_operator();
+	}
+
+	/**
+	 * Determine whether current user can access a product within the live workspace.
+	 *
+	 * @param int $product_id Product ID.
+	 * @return bool
+	 */
+	private static function current_user_can_access_product( int $product_id ): bool {
+		$scope = self::get_current_user_live_scope();
+
+		if ( ! empty( $scope['full_workspace'] ) ) {
+			return true;
+		}
+
+		return in_array( $product_id, $scope['product_ids'], true );
+	}
+
+	/**
+	 * Filter live cell map down to products current user is allowed to see.
+	 *
+	 * @param array<int|string,mixed> $cells Live cell state.
+	 * @return array<int|string,mixed>
+	 */
+	private static function filter_live_cells_for_current_user( array $cells ): array {
+		$scope = self::get_current_user_live_scope();
+
+		if ( ! empty( $scope['full_workspace'] ) ) {
+			return $cells;
+		}
+
+		$allowed_ids = array_flip( $scope['product_ids'] );
+		$filtered    = [];
+
+		foreach ( $cells as $product_id => $values ) {
+			$product_id = absint( (int) $product_id );
+
+			if ( ! isset( $allowed_ids[ $product_id ] ) ) {
+				continue;
+			}
+
+			$filtered[ $product_id ] = is_array( $values ) ? $values : [];
+		}
+
+		return $filtered;
+	}
+
+	/**
+	 * Refresh current user's ownership timestamp for a row.
+	 *
+	 * @param array<int|string,mixed> $row_owners Existing ownership map.
+	 * @param int                     $product_id Product row ID.
+	 * @return array<int|string,mixed>
+	 */
+	private static function touch_live_row_owner( array $row_owners, int $product_id ): array {
+		$row_owners = self::prune_live_row_owners( $row_owners );
+
+		if ( ! isset( $row_owners[ $product_id ] ) || ! is_array( $row_owners[ $product_id ] ) ) {
+			$row_owners[ $product_id ] = [];
+		}
+
+		$row_owners[ $product_id ][ get_current_user_id() ] = [
+			'name' => self::get_current_editor_name(),
+			'ts'   => time(),
+		];
+
+		return $row_owners;
+	}
+
+	/**
+	 * Remove stale row-owner entries.
+	 *
+	 * @param array<int|string,mixed> $row_owners Row ownership map.
+	 * @return array<int|string,mixed>
+	 */
+	private static function prune_live_row_owners( array $row_owners ): array {
+		$cutoff = time() - 30;
+		$clean  = [];
+
+		foreach ( $row_owners as $product_id => $owners ) {
+			$product_id = absint( (int) $product_id );
+
+			if ( ! $product_id || ! is_array( $owners ) ) {
+				continue;
+			}
+
+			foreach ( $owners as $user_id => $owner ) {
+				if ( ! is_array( $owner ) || empty( $owner['ts'] ) || (int) $owner['ts'] < $cutoff ) {
+					continue;
+				}
+
+				$clean[ $product_id ][ $user_id ] = [
+					'name' => isset( $owner['name'] ) ? (string) $owner['name'] : '',
+					'ts'   => (int) $owner['ts'],
+				];
+			}
+		}
+
+		return $clean;
+	}
+
+	/**
+	 * Trim direct messages to recent conversation history.
+	 *
+	 * @param array<int,mixed> $messages Direct message list.
+	 * @return array<int,mixed>
+	 */
+	private static function prune_live_direct_messages( array $messages ): array {
+		$cutoff = time() - HOUR_IN_SECONDS;
+		$clean  = [];
+
+		foreach ( $messages as $message ) {
+			if ( ! is_array( $message ) || empty( $message['ts'] ) || (int) $message['ts'] < $cutoff ) {
+				continue;
+			}
+
+			$clean[] = [
+				'id'           => isset( $message['id'] ) ? sanitize_key( (string) $message['id'] ) : '',
+				'from_user_id' => isset( $message['from_user_id'] ) ? absint( (int) $message['from_user_id'] ) : 0,
+				'to_user_id'   => isset( $message['to_user_id'] ) ? absint( (int) $message['to_user_id'] ) : 0,
+				'from_name'    => isset( $message['from_name'] ) ? (string) $message['from_name'] : '',
+				'message'      => isset( $message['message'] ) ? (string) $message['message'] : '',
+				'ts'           => (int) $message['ts'],
+			];
+		}
+
+		return array_slice( $clean, -100 );
+	}
+
+	/**
+	 * Return only direct messages involving the current user.
+	 *
+	 * @param array<int,mixed> $messages Direct message list.
+	 * @return array<int,mixed>
+	 */
+	private static function filter_live_direct_messages_for_current_user( array $messages ): array {
+		$current_user_id = get_current_user_id();
+		$filtered = [];
+
+		foreach ( $messages as $message ) {
+			if ( ! is_array( $message ) ) {
+				continue;
+			}
+
+			$from_user_id = isset( $message['from_user_id'] ) ? absint( (int) $message['from_user_id'] ) : 0;
+			$to_user_id   = isset( $message['to_user_id'] ) ? absint( (int) $message['to_user_id'] ) : 0;
+
+			if ( $from_user_id !== $current_user_id && $to_user_id !== $current_user_id ) {
+				continue;
+			}
+
+			$filtered[] = $message;
+		}
+
+		return $filtered;
+	}
+
+	/**
+	 * Filter row owners down to the current user's visible scope.
+	 *
+	 * @param array<int|string,mixed> $row_owners Ownership map.
+	 * @return array<int|string,mixed>
+	 */
+	private static function filter_live_row_owners_for_current_user( array $row_owners ): array {
+		$scope = self::get_current_user_live_scope();
+
+		if ( ! empty( $scope['full_workspace'] ) ) {
+			return $row_owners;
+		}
+
+		$allowed_ids = array_flip( $scope['product_ids'] );
+		$filtered    = [];
+
+		foreach ( $row_owners as $product_id => $owners ) {
+			$product_id = absint( (int) $product_id );
+
+			if ( ! isset( $allowed_ids[ $product_id ] ) ) {
+				continue;
+			}
+
+			$filtered[ $product_id ] = is_array( $owners ) ? $owners : [];
+		}
+
+		return $filtered;
+	}
+
+	/**
+	 * Persist live session state for short-lived collaborative editing.
+	 *
+	 * @param string             $session_id Live session ID.
+	 * @param array<string,mixed> $state     Session state payload.
+	 */
+	private static function save_live_state( string $session_id, array $state ): void {
+		set_transient( self::live_transient_key( $session_id ), $state, HOUR_IN_SECONDS );
+	}
+
+	/**
+	 * Remove stale live presence entries.
+	 *
+	 * @param array<int|string,mixed> $presence Presence map keyed by user ID.
+	 * @return array<int|string,mixed>
+	 */
+	private static function prune_live_presence( array $presence ): array {
+		$cutoff = time() - 30;
+		$clean  = [];
+
+		foreach ( $presence as $user_id => $entry ) {
+			if ( ! is_array( $entry ) || empty( $entry['ts'] ) ) {
+				continue;
+			}
+
+			if ( (int) $entry['ts'] < $cutoff ) {
+				continue;
+			}
+
+			$clean[ $user_id ] = [
+				'name' => isset( $entry['name'] ) ? (string) $entry['name'] : '',
+				'ts'   => (int) $entry['ts'],
+			];
+		}
+
+		return $clean;
+	}
+
+	/**
+	 * Resolve current editor display name.
+	 *
+	 * @return string
+	 */
+	private static function get_current_editor_name(): string {
+		$user = wp_get_current_user();
+
+		if ( ! $user instanceof \WP_User ) {
+			return '';
+		}
+
+		return (string) $user->display_name;
 	}
 
 	/**

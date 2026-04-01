@@ -37,6 +37,16 @@
 	/** Taxonomy option lists for checkbox editors. */
 	const taxonomyOptions = spreadEmData.taxonomies || { categories: [], tags: [] };
 
+	/** Live-session configuration and state. */
+	const liveConfig = spreadEmData.live || { enabled: false };
+	const currentUser = spreadEmData.current_user || { id: 0, name: '' };
+	let liveVersion = 0;
+	let livePollTimer = null;
+	let isApplyingRemote = false;
+	let activePresence = {};
+	let directMessages = [];
+	let openImUserId = 0;
+
 	/** -----------------------------------------------------------------------
 	 * Bootstrap
 	 * ---------------------------------------------------------------------- */
@@ -55,6 +65,16 @@
 		// Button handlers.
 		$( '#spread-em-save' ).on( 'click', handleSave );
 		$( '#spread-em-undo' ).on( 'click', handleUndo );
+
+		if ( liveConfig.enabled ) {
+			if ( ! $( '#spread-em-live-presence' ).length ) {
+				$( '#spread-em-status' ).after( '<span id="spread-em-live-presence" class="spread-em-status spread-em-status--info"></span>' );
+			}
+			if ( liveConfig.full_workspace ) {
+				mountImWindow();
+			}
+			startLiveSessionSync();
+		}
 
 		// Hide/show parent product rows.
 		$( '#spread-em-hide-parents' ).on( 'change', function () {
@@ -532,11 +552,310 @@
 
 		currentData[ rowIndex ][ key ] = newValue;
 
+		if ( liveConfig.enabled && ! isApplyingRemote ) {
+			pushLiveCellChange( rowIndex, key, newValue );
+		}
+
 		isDirty = true;
 		$( '#spread-em-save' ).prop( 'disabled', false );
 		$( '#spread-em-undo' ).prop( 'disabled', false );
 		markRowDirty( rowIndex );
 		clearStatus();
+	}
+
+	/** -----------------------------------------------------------------------
+	 * Live session sync
+	 * ---------------------------------------------------------------------- */
+
+	function startLiveSessionSync() {
+		pullLiveState( true );
+		const interval = parseInt( liveConfig.poll_interval, 10 ) || 2500;
+		livePollTimer = window.setInterval( function () {
+			pullLiveState( false );
+		}, interval );
+	}
+
+	function pushLiveCellChange( rowIndex, key, value ) {
+		const row = currentData[ rowIndex ];
+
+		if ( ! row || ! row.id ) {
+			return;
+		}
+
+		$.post(
+			spreadEmData.ajax_url,
+			{
+				action: 'spread_em_live_push',
+				nonce: liveConfig.nonce,
+				session_id: liveConfig.session_id,
+				product_id: row.id,
+				key: key,
+				value: value,
+			}
+		).done( function ( response ) {
+			if ( response && response.success && response.data && response.data.version ) {
+				liveVersion = Math.max( liveVersion, parseInt( response.data.version, 10 ) || 0 );
+			}
+		} );
+	}
+
+	function pullLiveState( force ) {
+		$.post(
+			spreadEmData.ajax_url,
+			{
+				action: 'spread_em_live_pull',
+				nonce: liveConfig.nonce,
+				session_id: liveConfig.session_id,
+				since_version: force ? 0 : liveVersion,
+			}
+		).done( function ( response ) {
+			if ( ! response || ! response.success || ! response.data ) {
+				return;
+			}
+
+			liveVersion = Math.max( liveVersion, parseInt( response.data.version, 10 ) || 0 );
+			activePresence = response.data.presence || {};
+			directMessages = response.data.direct_messages || [];
+			updateLivePresence( activePresence );
+			renderImWindow();
+
+			if ( response.data.has_updates && response.data.cells ) {
+				applyRemoteCells( response.data.cells );
+			}
+		} );
+	}
+
+	function applyRemoteCells( cellMap ) {
+		isApplyingRemote = true;
+
+		Object.keys( cellMap ).forEach( function ( productIdKey ) {
+			const productId = parseInt( productIdKey, 10 );
+			if ( Number.isNaN( productId ) ) {
+				return;
+			}
+
+			const rowIndex = findRowIndexByProductId( productId );
+			if ( rowIndex < 0 ) {
+				return;
+			}
+
+			const updates = cellMap[ productIdKey ] || {};
+
+			Object.keys( updates ).forEach( function ( key ) {
+				const nextVal = String( updates[ key ] );
+				const prevVal = currentData[ rowIndex ][ key ] !== undefined ? String( currentData[ rowIndex ][ key ] ) : '';
+
+				if ( nextVal === prevVal ) {
+					return;
+				}
+
+				currentData[ rowIndex ][ key ] = nextVal;
+				patchCellDomValue( rowIndex, key, nextVal );
+				markRowDirty( rowIndex );
+				isDirty = true;
+			} );
+		} );
+
+		isApplyingRemote = false;
+	}
+
+	function findRowIndexByProductId( productId ) {
+		for ( let i = 0; i < currentData.length; i++ ) {
+			if ( parseInt( currentData[ i ].id, 10 ) === productId ) {
+				return i;
+			}
+		}
+
+		return -1;
+	}
+
+	function patchCellDomValue( rowIndex, key, value ) {
+		const $cell = $( '#spread-em-tbody tr[data-row="' + rowIndex + '"] td[data-key="' + key + '"]' );
+
+		if ( ! $cell.length || $cell.find( ':focus' ).length ) {
+			return;
+		}
+
+		const picker = $cell.find( '.spread-em-taxonomy-picker' ).data( 'picker' );
+		const $input = $cell.find( 'input.spread-em-cell-input' );
+		const $select = $cell.find( 'select.spread-em-cell-select' );
+
+		if ( picker && typeof picker.setValue === 'function' ) {
+			picker.setValue( value );
+			return;
+		}
+
+		if ( $input.length ) {
+			$input.val( value );
+			return;
+		}
+
+		if ( $select.length ) {
+			$select.val( value );
+			return;
+		}
+
+		$cell.text( value );
+	}
+
+	function updateLivePresence( presenceMap ) {
+		const names = [];
+
+		Object.keys( presenceMap ).forEach( function ( userIdKey ) {
+			const entry = presenceMap[ userIdKey ];
+			if ( ! entry || ! entry.name ) {
+				return;
+			}
+
+			names.push( String( entry.name ) );
+		} );
+
+		if ( ! names.length && currentUser.name ) {
+			names.push( String( currentUser.name ) );
+		}
+
+		const label = names.length
+			? 'Live editors: ' + names.join( ', ' )
+			: 'Live session connected';
+
+		$( '#spread-em-live-presence' ).text( label );
+	}
+
+	function mountImWindow() {
+		if ( $( '#spread-em-im-window' ).length ) {
+			return;
+		}
+
+		const html = [
+			'<div id="spread-em-im-window" class="spread-em-im-window">',
+				'<div class="spread-em-im-header">' + escapeHtml( spreadEmData.i18n.im_title ) + '</div>',
+				'<div class="spread-em-im-body">',
+					'<div class="spread-em-im-users">',
+						'<div class="spread-em-im-users-title">' + escapeHtml( spreadEmData.i18n.im_active_users ) + '</div>',
+						'<div id="spread-em-im-users-list"></div>',
+					'</div>',
+					'<div class="spread-em-im-chat">',
+						'<div id="spread-em-im-thread" class="spread-em-im-thread"></div>',
+						'<div class="spread-em-im-compose">',
+							'<input type="text" id="spread-em-im-input" class="spread-em-im-input" placeholder="' + escapeHtml( spreadEmData.i18n.im_placeholder ) + '">',
+							'<button type="button" id="spread-em-im-send" class="button button-primary">' + escapeHtml( spreadEmData.i18n.im_send ) + '</button>',
+						'</div>',
+					'</div>',
+				'</div>',
+			'</div>'
+		].join( '' );
+
+		$( 'body' ).append( html );
+
+		$( '#spread-em-im-send' ).on( 'click', sendDirectMessage );
+		$( '#spread-em-im-input' ).on( 'keydown', function ( e ) {
+			if ( 13 === e.which ) {
+				e.preventDefault();
+				sendDirectMessage();
+			}
+		} );
+	}
+
+	function renderImWindow() {
+		if ( ! liveConfig.full_workspace || ! $( '#spread-em-im-window' ).length ) {
+			return;
+		}
+
+		const $usersList = $( '#spread-em-im-users-list' );
+		$usersList.empty();
+
+		const userIds = Object.keys( activePresence ).filter( function ( userIdKey ) {
+			return parseInt( userIdKey, 10 ) !== parseInt( currentUser.id, 10 );
+		} );
+
+		if ( ! userIds.length ) {
+			$usersList.append( '<div class="spread-em-im-empty">' + escapeHtml( spreadEmData.i18n.im_no_active_users ) + '</div>' );
+		} else {
+			userIds.forEach( function ( userIdKey ) {
+				const userId = parseInt( userIdKey, 10 );
+				const entry = activePresence[ userIdKey ] || {};
+				const isActive = openImUserId === userId;
+				const $button = $( '<button type="button" class="spread-em-im-user button"></button>' )
+					.text( entry.name || ( 'User #' + userId ) )
+					.toggleClass( 'spread-em-im-user--active', isActive )
+					.on( 'click', function () {
+						openImUserId = userId;
+						renderImWindow();
+					} );
+
+				$usersList.append( $button );
+			} );
+		}
+
+		if ( !openImUserId && userIds.length ) {
+			openImUserId = parseInt( userIds[ 0 ], 10 );
+		}
+
+		renderImThread();
+	}
+
+	function renderImThread() {
+		const $thread = $( '#spread-em-im-thread' );
+		if ( !$thread.length ) {
+			return;
+		}
+
+		$thread.empty();
+
+		if ( !openImUserId ) {
+			$thread.append( '<div class="spread-em-im-empty">' + escapeHtml( spreadEmData.i18n.im_no_active_users ) + '</div>' );
+			return;
+		}
+
+		const threadMessages = directMessages.filter( function (message) {
+			const fromId = parseInt( message.from_user_id, 10 );
+			const toId = parseInt( message.to_user_id, 10 );
+			const me = parseInt( currentUser.id, 10 );
+			return ( fromId === me && toId === openImUserId ) || ( fromId === openImUserId && toId === me );
+		} );
+
+		threadMessages.forEach( function (message) {
+			const mine = parseInt( message.from_user_id, 10 ) === parseInt( currentUser.id, 10 );
+			const $message = $( '<div class="spread-em-im-message"></div>' ).toggleClass( 'spread-em-im-message--mine', mine );
+			$message.append( $( '<div class="spread-em-im-message-author"></div>' ).text( mine ? currentUser.name : ( message.from_name || 'User' ) ) );
+			$message.append( $( '<div class="spread-em-im-message-body"></div>' ).text( message.message || '' ) );
+			$thread.append( $message );
+		} );
+
+		$thread.scrollTop( $thread.prop( 'scrollHeight' ) );
+	}
+
+	function sendDirectMessage() {
+		const message = String( $( '#spread-em-im-input' ).val() || '' ).trim();
+
+		if ( !openImUserId || !message ) {
+			return;
+		}
+
+		$.post(
+			spreadEmData.ajax_url,
+			{
+				action: 'spread_em_live_im_send',
+				nonce: liveConfig.nonce,
+				session_id: liveConfig.session_id,
+				to_user_id: openImUserId,
+				message: message,
+			}
+		).done( function ( response ) {
+			if ( response && response.success ) {
+				$( '#spread-em-im-input' ).val( '' );
+				pullLiveState( true );
+			}
+		} );
+	}
+
+	function escapeHtml( value ) {
+		return String( value || '' )
+			.replace( /&/g, '&amp;' )
+			.replace( /</g, '&lt;' )
+			.replace( />/g, '&gt;' )
+			.replace( /"/g, '&quot;' )
+			.replace( /'/g, '&#39;' );
 	}
 
 	/**

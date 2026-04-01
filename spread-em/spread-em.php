@@ -32,7 +32,10 @@ add_action( 'init', 'spread_em_load_textdomain' );
  */
 function spread_em_activate(): void {
 	require_once SPREAD_EM_PLUGIN_DIR . 'includes/class-spread-em-logger.php';
+	require_once SPREAD_EM_PLUGIN_DIR . 'includes/class-spread-em-permissions.php';
 	SpreadEm_Logger::create_table();
+	SpreadEm_Permissions::grant_default_capabilities();
+	SpreadEm_Permissions::ensure_capabilities();
 }
 register_activation_hook( __FILE__, 'spread_em_activate' );
 
@@ -58,10 +61,12 @@ add_action( 'plugins_loaded', 'spread_em_check_dependencies' );
  */
 function spread_em_init(): void {
 	require_once SPREAD_EM_PLUGIN_DIR . 'includes/class-spread-em-logger.php';
+	require_once SPREAD_EM_PLUGIN_DIR . 'includes/class-spread-em-permissions.php';
 	require_once SPREAD_EM_PLUGIN_DIR . 'includes/class-spread-em-admin.php';
 	require_once SPREAD_EM_PLUGIN_DIR . 'includes/class-spread-em-ajax.php';
 	require_once SPREAD_EM_PLUGIN_DIR . 'includes/class-spread-em-log-page.php';
 
+	SpreadEm_Permissions::ensure_capabilities();
 	SpreadEm_Logger::ensure_schema();
 
 	SpreadEm_Admin::init();

@@ -32,6 +32,13 @@ Core features:
 * Revert single changes or an entire save state from WooCommerce > Spread Em Log
 * Log retention capped to the latest 15 entries for lightweight DB footprint
 
+Permissions and role compatibility:
+
+* Uses plugin capabilities (instead of hardcoded role names) for editor, live collaboration, global operator mode, logs, reverts, and IM
+* Works with popular role-manager plugins as a drop-in capability assignment workflow
+* Default grants: Administrator gets all Spread Em capabilities; Shop Manager gets individual-contributor capabilities without global operator
+* Capability map is filterable via spread_em_default_capability_map
+
 Design approach:
 
 * Mirrors WooCommerce CSV exporter field structure where possible
