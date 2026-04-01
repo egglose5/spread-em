@@ -62,6 +62,31 @@ The core idea is simple: keep WooCommerce's existing catalogue and product data 
 
 ---
 
+## Testing
+
+Automated tests now exist under `tests/` and run with PHPUnit.
+
+### Local setup
+
+1. Install Composer (if not already installed).
+2. Install dev dependencies:
+   ```
+   composer install
+   ```
+3. Run the test suite:
+   ```
+   composer test
+   ```
+
+### Current coverage
+
+- Capability mapping and permission checks in `SpreadEm_Permissions`
+- Live activity feed pruning, bounding, and scope filtering in `SpreadEm_Ajax`
+
+If `composer` or `phpunit` is not installed on your machine yet, tests cannot execute until one of those tools is available.
+
+---
+
 ## Compatibility Notes
 
 - **WooCommerce admin category filtering is intentionally adjusted** — by default, WooCommerce's admin product category filter matches only the exact selected term. Spread'em changes that behavior so selecting a parent category also includes products assigned to its child categories.

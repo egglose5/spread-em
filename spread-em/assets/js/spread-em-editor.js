@@ -33,9 +33,32 @@
 
 	/** Column definitions supplied by the server. */
 	const columns = spreadEmData.columns || [];
-
-	/** Taxonomy option lists for checkbox editors. */
-	const taxonomyOptions = spreadEmData.taxonomies || { categories: [], tags: [] };
+	const fieldHelpers = window.SpreadEmEditorFields || {
+		getSelectOptions: function () { return null; },
+		isTaxonomyColumn: function () { return false; },
+		createTaxonomyPicker: function ( key, value, inputClass ) {
+			const $input = $( '<input>' )
+				.attr( { type: 'text', value: value !== undefined && value !== null ? String( value ) : '' } )
+				.addClass( inputClass );
+			return {
+				$el: $input,
+				$input: $input,
+				getValue: function () {
+					return String( $input.val() || '' );
+				},
+				setValue: function ( next ) {
+					$input.val( String( next || '' ) );
+				},
+				onSelectionChange: function () {},
+			};
+		},
+	};
+	const layoutHelpers = window.SpreadEmEditorLayout || {
+		initColumnLayout: function () {},
+		syncColumnWidthsForContent: function () {},
+		loadColumnWidths: function () { return {}; },
+		saveColumnWidths: function () {},
+	};
 
 	/** Live-session configuration and state. */
 	const liveConfig = spreadEmData.live || { enabled: false };
@@ -45,19 +68,25 @@
 	let isApplyingRemote = false;
 	let activePresence = {};
 	let directMessages = [];
-	let openImUserId = 0;
+	let rowOwners = {};
+	let liveActivity = [];
+	const claimedRowsByMe = {};
 
 	/** -----------------------------------------------------------------------
 	 * Bootstrap
 	 * ---------------------------------------------------------------------- */
 
 	$( document ).ready( function () {
+		if ( ! window.SpreadEmEditorFields || ! window.SpreadEmEditorLayout ) {
+			showStatus( spreadEmData.i18n.module_missing || 'Some editor modules failed to load. Limited fallback mode is active.', 'error' );
+		}
+
 		originalData = JSON.parse( JSON.stringify( spreadEmData.products ) );
 		currentData  = JSON.parse( JSON.stringify( spreadEmData.products ) );
 
 		buildTable();
-		initColumnLayout();
-		syncColumnWidthsForContent();
+		layoutHelpers.initColumnLayout();
+		layoutHelpers.syncColumnWidthsForContent();
 
 		$( '#spread-em-loading' ).hide();
 		$( '#spread-em-table-wrap' ).show();
@@ -71,7 +100,18 @@
 				$( '#spread-em-status' ).after( '<span id="spread-em-live-presence" class="spread-em-status spread-em-status--info"></span>' );
 			}
 			if ( liveConfig.full_workspace ) {
-				mountImWindow();
+				initGlobalOperatorConsole();
+			}
+			if ( liveConfig.full_workspace && window.SpreadEmEditorIM ) {
+				window.SpreadEmEditorIM.init( {
+					liveConfig: liveConfig,
+					currentUser: currentUser,
+					ajaxUrl: spreadEmData.ajax_url,
+					i18n: spreadEmData.i18n || {},
+					onMessageSent: function () {
+						pullLiveState( true );
+					},
+				} );
 			}
 			startLiveSessionSync();
 		}
@@ -79,7 +119,7 @@
 		// Hide/show parent product rows.
 		$( '#spread-em-hide-parents' ).on( 'change', function () {
 			$( '#spread-em-tbody tr.spread-em-parent-row' ).toggle( ! this.checked );
-			syncColumnWidthsForContent();
+			layoutHelpers.syncColumnWidthsForContent();
 		} );
 
 		// Warn on leaving with unsaved changes.
@@ -110,7 +150,7 @@
 	function buildTable() {
 		buildHeader();
 		buildBody();
-		syncColumnWidthsForContent();
+		layoutHelpers.syncColumnWidthsForContent();
 	}
 
 	function buildHeader() {
@@ -119,7 +159,7 @@
 		$thead.empty();
 		$colgroup.empty();
 
-		const savedWidths = loadColumnWidths();
+		const savedWidths = layoutHelpers.loadColumnWidths();
 
 		// Column header row.
 		const $tr = $( '<tr>' );
@@ -148,7 +188,7 @@
 					.on( 'mouseup.colresize', function () {
 						$( document ).off( '.colresize' );
 						$( 'body' ).removeClass( 'spread-em-col-resizing' );
-						saveColumnWidths();
+						layoutHelpers.saveColumnWidths();
 					} );
 			} );
 			$th.append( $handle );
@@ -169,7 +209,7 @@
 			const $td = $( '<td>' ).attr( 'data-key', col.key );
 
 			if ( ! col.readonly ) {
-				const selectOptions = getSelectOptions( col.key );
+				const selectOptions = fieldHelpers.getSelectOptions( col.key );
 				let $input;
 				let getOverrideValue;
 
@@ -182,8 +222,8 @@
 					getOverrideValue = function () {
 						return String( $input.val() || '' );
 					};
-				} else if ( isTaxonomyColumn( col.key ) ) {
-					const picker = createTaxonomyPicker( col.key, '', 'spread-em-override-input' );
+				} else if ( fieldHelpers.isTaxonomyColumn( col.key ) ) {
+					const picker = fieldHelpers.createTaxonomyPicker( col.key, '', 'spread-em-override-input' );
 					$input = picker.$el;
 					getOverrideValue = picker.getValue;
 				} else {
@@ -202,7 +242,7 @@
 					.on( 'click', ( function ( colKey, getter ) {
 						return function () {
 							const val = getter();
-							if ( '' === val && ! isTaxonomyColumn( colKey ) ) { return; }
+							if ( '' === val && ! fieldHelpers.isTaxonomyColumn( colKey ) ) { return; }
 							applyColumnOverride( colKey, val );
 						};
 					} )( col.key, getOverrideValue ) );
@@ -212,7 +252,7 @@
 					return function ( e ) {
 						if ( 13 === e.which ) {
 							const val = getter();
-							if ( '' === val && ! isTaxonomyColumn( colKey ) ) { return; }
+							if ( '' === val && ! fieldHelpers.isTaxonomyColumn( colKey ) ) { return; }
 							applyColumnOverride( colKey, val );
 						}
 					};
@@ -305,9 +345,9 @@
 	function buildCellInput( col, value, rowIndex ) {
 		const currentValue = value !== undefined && value !== null ? String( value ) : '';
 
-		if ( isTaxonomyColumn( col.key ) ) {
+		if ( fieldHelpers.isTaxonomyColumn( col.key ) ) {
 			let trackedValue = currentValue;
-			const picker = createTaxonomyPicker( col.key, currentValue, 'spread-em-cell-input' );
+			const picker = fieldHelpers.createTaxonomyPicker( col.key, currentValue, 'spread-em-cell-input' );
 
 			picker.onSelectionChange( function ( nextVal ) {
 				if ( nextVal !== trackedValue ) {
@@ -332,7 +372,7 @@
 		}
 
 		// Certain columns get a <select> instead of a free-text <input>.
-		const selectOptions = getSelectOptions( col.key );
+		const selectOptions = fieldHelpers.getSelectOptions( col.key );
 
 		if ( selectOptions ) {
 			const $select = $( '<select>' )
@@ -384,155 +424,6 @@
 	}
 
 	/** -----------------------------------------------------------------------
-	 * Select option maps
-	 * ---------------------------------------------------------------------- */
-
-	/**
-	 * Return an array of { value, label } pairs for fields that use a <select>,
-	 * or null for free-text fields.
-	 *
-	 * @param {string} key Column key.
-	 * @returns {Array|null}
-	 */
-	function getSelectOptions( key ) {
-		const maps = {
-			status: [
-				{ value: 'publish', label: 'Published' },
-				{ value: 'draft',   label: 'Draft'     },
-				{ value: 'pending', label: 'Pending'   },
-				{ value: 'private', label: 'Private'   },
-			],
-			catalog_visibility: [
-				{ value: 'visible',  label: 'Visible (catalogue + search)' },
-				{ value: 'catalog',  label: 'Catalogue only'               },
-				{ value: 'search',   label: 'Search only'                  },
-				{ value: 'hidden',   label: 'Hidden'                       },
-			],
-			tax_status: [
-				{ value: 'taxable',  label: 'Taxable'          },
-				{ value: 'shipping', label: 'Shipping only'    },
-				{ value: 'none',     label: 'None'             },
-			],
-			stock_status: [
-				{ value: 'instock',      label: 'In stock'      },
-				{ value: 'outofstock',   label: 'Out of stock'  },
-				{ value: 'onbackorder',  label: 'On backorder'  },
-			],
-			manage_stock: [
-				{ value: 'yes', label: 'Yes' },
-				{ value: 'no',  label: 'No'  },
-			],
-			backorders: [
-				{ value: 'no',     label: 'Do not allow' },
-				{ value: 'notify', label: 'Allow (notify)' },
-				{ value: 'yes',    label: 'Allow'          },
-			],
-		};
-
-		return maps[ key ] || null;
-	}
-
-	/**
-	 * Check whether a column is taxonomy-based and should use checkbox editor.
-	 *
-	 * @param {string} key Column key.
-	 * @returns {boolean}
-	 */
-	function isTaxonomyColumn( key ) {
-		return 'categories' === key || 'tags' === key;
-	}
-
-	/**
-	 * Build a taxonomy checkbox picker with an editable text representation.
-	 *
-	 * @param {string} key        Column key (categories|tags).
-	 * @param {string} value      Initial CSV value.
-	 * @param {string} inputClass Input class name.
-	 * @returns {{ $el:jQuery, $input:jQuery, getValue:function, setValue:function, onSelectionChange:function }}
-	 */
-	function createTaxonomyPicker( key, value, inputClass ) {
-		const options = Array.isArray( taxonomyOptions[ key ] ) ? taxonomyOptions[ key ] : [];
-		let listeners = [];
-
-		const $wrap = $( '<div>' ).addClass( 'spread-em-taxonomy-picker' );
-		const $input = $( '<input>' )
-			.attr( { type: 'text', value: value } )
-			.addClass( inputClass );
-		const $toggle = $( '<button type="button">' )
-			.addClass( 'spread-em-taxonomy-toggle' )
-			.attr( 'title', 'Select values' )
-			.text( '☑' );
-		const $panel = $( '<div>' ).addClass( 'spread-em-taxonomy-panel' ).hide();
-
-		function parseCsv( raw ) {
-			return String( raw || '' )
-				.split( ',' )
-				.map( function ( item ) { return item.trim(); } )
-				.filter( function ( item ) { return '' !== item; } );
-		}
-
-		function buildPanel( selected ) {
-			$panel.empty();
-			options.forEach( function ( option ) {
-				const checked = selected.indexOf( option ) !== -1;
-				const $label = $( '<label>' ).addClass( 'spread-em-taxonomy-option' );
-				const $cb = $( '<input type="checkbox">' )
-					.val( option )
-					.prop( 'checked', checked )
-					.on( 'change', function () {
-						const next = [];
-						$panel.find( 'input[type="checkbox"]:checked' ).each( function () {
-							next.push( String( $( this ).val() ) );
-						} );
-						const csv = next.join( ', ' );
-						$input.val( csv );
-						listeners.forEach( function ( fn ) { fn( csv ); } );
-					} );
-
-				$label.append( $cb ).append( $( '<span>' ).text( option ) );
-				$panel.append( $label );
-			} );
-		}
-
-		function setValue( csv ) {
-			$input.val( String( csv || '' ) );
-			buildPanel( parseCsv( csv ) );
-		}
-
-		$toggle.on( 'click', function ( e ) {
-			e.preventDefault();
-			$panel.toggle();
-		} );
-
-		$( document ).on( 'click', function ( e ) {
-			if ( ! $wrap.is( e.target ) && 0 === $wrap.has( e.target ).length ) {
-				$panel.hide();
-			}
-		} );
-
-		$input.on( 'input', function () {
-			buildPanel( parseCsv( $input.val() ) );
-		} );
-
-		$wrap.append( $input ).append( $toggle ).append( $panel );
-		setValue( value );
-
-		$wrap.data( 'picker', { setValue: setValue } );
-
-		return {
-			$el: $wrap,
-			$input: $input,
-			getValue: function () {
-				return String( $input.val() || '' );
-			},
-			setValue: setValue,
-			onSelectionChange: function ( fn ) {
-				listeners.push( fn );
-			},
-		};
-	}
-
-	/** -----------------------------------------------------------------------
 	 * Change tracking
 	 * ---------------------------------------------------------------------- */
 
@@ -553,6 +444,7 @@
 		currentData[ rowIndex ][ key ] = newValue;
 
 		if ( liveConfig.enabled && ! isApplyingRemote ) {
+			pushLiveRowClaim( rowIndex );
 			pushLiveCellChange( rowIndex, key, newValue );
 		}
 
@@ -588,6 +480,7 @@
 				action: 'spread_em_live_push',
 				nonce: liveConfig.nonce,
 				session_id: liveConfig.session_id,
+				mode: 'update',
 				product_id: row.id,
 				key: key,
 				value: value,
@@ -597,6 +490,40 @@
 				liveVersion = Math.max( liveVersion, parseInt( response.data.version, 10 ) || 0 );
 			}
 		} );
+	}
+
+	function pushLiveRowClaim( rowIndex ) {
+		const row = currentData[ rowIndex ];
+
+		if ( ! row || ! row.id ) {
+			return;
+		}
+
+		const productId = parseInt( row.id, 10 );
+		if ( Number.isNaN( productId ) || productId <= 0 ) {
+			return;
+		}
+
+		const now = Date.now();
+		const lastClaimAt = claimedRowsByMe[ productId ] || 0;
+
+		// Avoid flooding claim events while a user is actively typing on one row.
+		if ( now - lastClaimAt < 12000 ) {
+			return;
+		}
+
+		claimedRowsByMe[ productId ] = now;
+
+		$.post(
+			spreadEmData.ajax_url,
+			{
+				action: 'spread_em_live_push',
+				nonce: liveConfig.nonce,
+				session_id: liveConfig.session_id,
+				mode: 'claim',
+				product_id: productId,
+			}
+		);
 	}
 
 	function pullLiveState( force ) {
@@ -616,8 +543,15 @@
 			liveVersion = Math.max( liveVersion, parseInt( response.data.version, 10 ) || 0 );
 			activePresence = response.data.presence || {};
 			directMessages = response.data.direct_messages || [];
+			rowOwners = response.data.row_owners || {};
+			liveActivity = response.data.activity || [];
 			updateLivePresence( activePresence );
-			renderImWindow();
+			if ( liveConfig.full_workspace ) {
+				updateGlobalOperatorConsole( activePresence, rowOwners, liveActivity );
+			}
+			if ( liveConfig.full_workspace && window.SpreadEmEditorIM ) {
+				window.SpreadEmEditorIM.update( activePresence, directMessages );
+			}
 
 			if ( response.data.has_updates && response.data.cells ) {
 				applyRemoteCells( response.data.cells );
@@ -721,132 +655,160 @@
 		$( '#spread-em-live-presence' ).text( label );
 	}
 
-	function mountImWindow() {
-		if ( $( '#spread-em-im-window' ).length ) {
+	function initGlobalOperatorConsole() {
+		if ( $( '#spread-em-operator-console' ).length ) {
 			return;
 		}
 
+		const i18n = spreadEmData.i18n || {};
 		const html = [
-			'<div id="spread-em-im-window" class="spread-em-im-window">',
-				'<div class="spread-em-im-header">' + escapeHtml( spreadEmData.i18n.im_title ) + '</div>',
-				'<div class="spread-em-im-body">',
-					'<div class="spread-em-im-users">',
-						'<div class="spread-em-im-users-title">' + escapeHtml( spreadEmData.i18n.im_active_users ) + '</div>',
-						'<div id="spread-em-im-users-list"></div>',
+			'<section id="spread-em-operator-console" class="spread-em-operator-console" aria-live="polite">',
+				'<div class="spread-em-operator-console__header">' + escapeHtml( i18n.operator_activity_title || 'Live Operator Console' ) + '</div>',
+				'<div class="spread-em-operator-console__body">',
+					'<div class="spread-em-operator-console__column">',
+						'<h2 class="spread-em-operator-console__title">' + escapeHtml( i18n.operator_activity_active || 'Active editors' ) + '</h2>',
+						'<div id="spread-em-operator-users" class="spread-em-operator-console__users"></div>',
 					'</div>',
-					'<div class="spread-em-im-chat">',
-						'<div id="spread-em-im-thread" class="spread-em-im-thread"></div>',
-						'<div class="spread-em-im-compose">',
-							'<input type="text" id="spread-em-im-input" class="spread-em-im-input" placeholder="' + escapeHtml( spreadEmData.i18n.im_placeholder ) + '">',
-							'<button type="button" id="spread-em-im-send" class="button button-primary">' + escapeHtml( spreadEmData.i18n.im_send ) + '</button>',
-						'</div>',
+					'<div class="spread-em-operator-console__column">',
+						'<h2 class="spread-em-operator-console__title">' + escapeHtml( i18n.operator_activity_events || 'Recent activity' ) + '</h2>',
+						'<div id="spread-em-operator-events" class="spread-em-operator-console__events"></div>',
 					'</div>',
 				'</div>',
-			'</div>'
+			'</section>',
 		].join( '' );
 
-		$( 'body' ).append( html );
-
-		$( '#spread-em-im-send' ).on( 'click', sendDirectMessage );
-		$( '#spread-em-im-input' ).on( 'keydown', function ( e ) {
-			if ( 13 === e.which ) {
-				e.preventDefault();
-				sendDirectMessage();
-			}
-		} );
+		$( '#spread-em-toolbar' ).after( html );
 	}
 
-	function renderImWindow() {
-		if ( ! liveConfig.full_workspace || ! $( '#spread-em-im-window' ).length ) {
+	function updateGlobalOperatorConsole( presenceMap, rowOwnerMap, activity ) {
+		const $users = $( '#spread-em-operator-users' );
+		const $events = $( '#spread-em-operator-events' );
+
+		if ( ! $users.length || ! $events.length ) {
 			return;
 		}
 
-		const $usersList = $( '#spread-em-im-users-list' );
-		$usersList.empty();
+		const ownerCounts = countOwnedRowsByUser( rowOwnerMap );
+		const i18n = spreadEmData.i18n || {};
 
-		const userIds = Object.keys( activePresence ).filter( function ( userIdKey ) {
-			return parseInt( userIdKey, 10 ) !== parseInt( currentUser.id, 10 );
-		} );
+		$users.empty();
+		const userIds = Object.keys( presenceMap || {} );
 
 		if ( ! userIds.length ) {
-			$usersList.append( '<div class="spread-em-im-empty">' + escapeHtml( spreadEmData.i18n.im_no_active_users ) + '</div>' );
+			$users.append( '<div class="spread-em-operator-console__empty">' + escapeHtml( i18n.operator_activity_none || 'No live activity yet.' ) + '</div>' );
 		} else {
 			userIds.forEach( function ( userIdKey ) {
+				const entry = presenceMap[ userIdKey ] || {};
 				const userId = parseInt( userIdKey, 10 );
-				const entry = activePresence[ userIdKey ] || {};
-				const isActive = openImUserId === userId;
-				const $button = $( '<button type="button" class="spread-em-im-user button"></button>' )
-					.text( entry.name || ( 'User #' + userId ) )
-					.toggleClass( 'spread-em-im-user--active', isActive )
-					.on( 'click', function () {
-						openImUserId = userId;
-						renderImWindow();
-					} );
+				const rowCount = ownerCounts[ userId ] || 0;
+				const scopeMode = entry.scope_mode === 'global_operator'
+					? ( i18n.operator_activity_scope_global || 'Global operator' )
+					: ( i18n.operator_activity_scope_contributor || 'Contributor scope' );
+				const rowsLabelTemplate = i18n.operator_activity_editing_rows || 'editing %d row(s)';
+				const rowsLabel = rowsLabelTemplate.replace( '%d', String( rowCount ) );
 
-				$usersList.append( $button );
+				const cardHtml = [
+					'<div class="spread-em-operator-user-card">',
+						'<div class="spread-em-operator-user-card__name">' + escapeHtml( entry.name || ( 'User #' + userId ) ) + '</div>',
+						'<div class="spread-em-operator-user-card__meta">' + escapeHtml( scopeMode ) + '</div>',
+						'<div class="spread-em-operator-user-card__meta">' + escapeHtml( rowsLabel ) + '</div>',
+						'<button type="button" class="button button-small spread-em-operator-user-card__im" data-user-id="' + userId + '">' + escapeHtml( i18n.im_open || 'Open IM' ) + '</button>',
+					'</div>',
+				].join( '' );
+
+				$users.append( cardHtml );
+			} );
+
+			$users.find( '.spread-em-operator-user-card__im' ).on( 'click', function () {
+				const toUserId = parseInt( $( this ).attr( 'data-user-id' ), 10 );
+				if ( Number.isNaN( toUserId ) || toUserId <= 0 ) {
+					return;
+				}
+
+				if ( window.SpreadEmEditorIM && typeof window.SpreadEmEditorIM.openThreadWithUser === 'function' ) {
+					window.SpreadEmEditorIM.openThreadWithUser( toUserId );
+				}
 			} );
 		}
 
-		if ( !openImUserId && userIds.length ) {
-			openImUserId = parseInt( userIds[ 0 ], 10 );
+		$events.empty();
+		const eventsToRender = Array.isArray( activity ) ? activity.slice( -30 ).reverse() : [];
+
+		if ( ! eventsToRender.length ) {
+			$events.append( '<div class="spread-em-operator-console__empty">' + escapeHtml( i18n.operator_activity_none || 'No live activity yet.' ) + '</div>' );
+			return;
 		}
 
-		renderImThread();
+		eventsToRender.forEach( function ( event ) {
+			$events.append( formatActivityEventItem( event ) );
+		} );
 	}
 
-	function renderImThread() {
-		const $thread = $( '#spread-em-im-thread' );
-		if ( !$thread.length ) {
-			return;
-		}
+	function countOwnedRowsByUser( rowOwnerMap ) {
+		const counts = {};
 
-		$thread.empty();
-
-		if ( !openImUserId ) {
-			$thread.append( '<div class="spread-em-im-empty">' + escapeHtml( spreadEmData.i18n.im_no_active_users ) + '</div>' );
-			return;
-		}
-
-		const threadMessages = directMessages.filter( function (message) {
-			const fromId = parseInt( message.from_user_id, 10 );
-			const toId = parseInt( message.to_user_id, 10 );
-			const me = parseInt( currentUser.id, 10 );
-			return ( fromId === me && toId === openImUserId ) || ( fromId === openImUserId && toId === me );
+		Object.keys( rowOwnerMap || {} ).forEach( function ( productIdKey ) {
+			const owners = rowOwnerMap[ productIdKey ] || {};
+			Object.keys( owners ).forEach( function ( userIdKey ) {
+				const userId = parseInt( userIdKey, 10 );
+				if ( Number.isNaN( userId ) || userId <= 0 ) {
+					return;
+				}
+				counts[ userId ] = ( counts[ userId ] || 0 ) + 1;
+			} );
 		} );
 
-		threadMessages.forEach( function (message) {
-			const mine = parseInt( message.from_user_id, 10 ) === parseInt( currentUser.id, 10 );
-			const $message = $( '<div class="spread-em-im-message"></div>' ).toggleClass( 'spread-em-im-message--mine', mine );
-			$message.append( $( '<div class="spread-em-im-message-author"></div>' ).text( mine ? currentUser.name : ( message.from_name || 'User' ) ) );
-			$message.append( $( '<div class="spread-em-im-message-body"></div>' ).text( message.message || '' ) );
-			$thread.append( $message );
-		} );
-
-		$thread.scrollTop( $thread.prop( 'scrollHeight' ) );
+		return counts;
 	}
 
-	function sendDirectMessage() {
-		const message = String( $( '#spread-em-im-input' ).val() || '' ).trim();
+	function formatActivityEventItem( event ) {
+		const safeEvent = event || {};
+		const userName = safeEvent.user_name || 'Someone';
+		const productId = parseInt( safeEvent.product_id, 10 );
+		const field = safeEvent.field ? String( safeEvent.field ) : '';
+		const type = safeEvent.type || 'activity';
+		const rows = parseInt( safeEvent.rows, 10 ) || 0;
+		const toUserName = safeEvent.to_user_name || '';
+		let message = userName + ' updated the workspace';
 
-		if ( !openImUserId || !message ) {
-			return;
+		if ( type === 'claim' ) {
+			message = userName + ' focused row #' + ( Number.isNaN( productId ) ? '?' : productId );
+		} else if ( type === 'edit' ) {
+			message = userName + ' edited ' + ( field || 'a field' ) + ' on row #' + ( Number.isNaN( productId ) ? '?' : productId );
+		} else if ( type === 'save' ) {
+			message = userName + ' saved ' + rows + ' row(s)';
+		} else if ( type === 'im' ) {
+			message = userName + ' messaged ' + ( toUserName || 'another user' );
 		}
 
-		$.post(
-			spreadEmData.ajax_url,
-			{
-				action: 'spread_em_live_im_send',
-				nonce: liveConfig.nonce,
-				session_id: liveConfig.session_id,
-				to_user_id: openImUserId,
-				message: message,
-			}
-		).done( function ( response ) {
-			if ( response && response.success ) {
-				$( '#spread-em-im-input' ).val( '' );
-				pullLiveState( true );
-			}
-		} );
+		return [
+			'<div class="spread-em-operator-event">',
+				'<div class="spread-em-operator-event__body">' + escapeHtml( message ) + '</div>',
+				'<div class="spread-em-operator-event__time">' + escapeHtml( formatEventTime( safeEvent.ts ) ) + '</div>',
+			'</div>',
+		].join( '' );
+	}
+
+	function formatEventTime( unixTs ) {
+		const ts = parseInt( unixTs, 10 );
+		if ( Number.isNaN( ts ) || ts <= 0 ) {
+			return '';
+		}
+
+		const now = Math.floor( Date.now() / 1000 );
+		const delta = Math.max( 0, now - ts );
+
+		if ( delta < 10 ) {
+			return 'just now';
+		}
+		if ( delta < 60 ) {
+			return delta + 's ago';
+		}
+		if ( delta < 3600 ) {
+			return Math.floor( delta / 60 ) + 'm ago';
+		}
+
+		return Math.floor( delta / 3600 ) + 'h ago';
 	}
 
 	function escapeHtml( value ) {
@@ -962,6 +924,7 @@
 				action : 'spread_em_save',
 				nonce  : spreadEmData.nonce,
 				changes: JSON.stringify( changes ),
+				live_session_id: liveConfig.enabled ? liveConfig.session_id : '',
 				context_parent_ids: JSON.stringify( getCurrentParentIds() ),
 			},
 		} )
@@ -981,7 +944,7 @@
 					if ( $( '#spread-em-hide-parents' ).is( ':checked' ) ) {
 						$( '#spread-em-tbody tr.spread-em-parent-row' ).hide();
 					}
-					syncColumnWidthsForContent();
+					layoutHelpers.syncColumnWidthsForContent();
 
 					$( '#spread-em-undo' ).prop( 'disabled', true );
 
@@ -1049,140 +1012,6 @@
 		} );
 
 		return changes;
-	}
-
-	/** -----------------------------------------------------------------------
-	 * Column resize helpers
-	 * ---------------------------------------------------------------------- */
-
-	const COL_WIDTHS_KEY = 'spreadEmColWidths';
-
-	/**
-	 * Load persisted column widths from localStorage.
-	 *
-	 * @returns {Object} Map of column key → pixel width.
-	 */
-	function loadColumnWidths() {
-		try {
-			return JSON.parse( localStorage.getItem( COL_WIDTHS_KEY ) || '{}' );
-		} catch ( e ) {
-			return {};
-		}
-	}
-
-	/**
-	 * Persist current <col> widths to localStorage.
-	 */
-	function saveColumnWidths() {
-		const widths = {};
-		$( '#spread-em-colgroup col' ).each( function () {
-			const key = $( this ).attr( 'data-key' );
-			const w   = parseInt( $( this ).css( 'width' ), 10 );
-			if ( key && w > 0 ) {
-				widths[ key ] = w;
-			}
-		} );
-		try {
-			localStorage.setItem( COL_WIDTHS_KEY, JSON.stringify( widths ) );
-		} catch ( e ) {}
-	}
-
-	/**
-	 * Lock the table into fixed layout using the initially rendered widths as
-	 * the baseline (or previously saved widths if the user has already resized).
-	 *
-	 * Called once after the first buildTable() in document.ready.  Subsequent
-	 * buildTable() calls (post-save rebuild) restore from localStorage via
-	 * buildHeader(), so no second call is needed.
-	 */
-	function initColumnLayout() {
-		$( '#spread-em-table' ).css( 'table-layout', 'fixed' );
-
-		if ( ! Object.keys( loadColumnWidths() ).length ) {
-			// First visit – capture rendered widths as the baseline.
-			const measured = {};
-			$( '#spread-em-thead tr:first-child th' ).each( function () {
-				const key = $( this ).attr( 'data-key' );
-				if ( key ) {
-					measured[ key ] = $( this ).outerWidth();
-				}
-			} );
-
-			$( '#spread-em-colgroup col' ).each( function () {
-				const key = $( this ).attr( 'data-key' );
-				if ( measured[ key ] ) {
-					$( this ).css( 'width', measured[ key ] + 'px' );
-				}
-			} );
-
-			try {
-				localStorage.setItem( COL_WIDTHS_KEY, JSON.stringify( measured ) );
-			} catch ( e ) {}
-		}
-	}
-
-	/**
-	 * Compute a safe minimum width for each column so controls do not overlap.
-	 * Adds extra room to the first visible column when variation rows are shown,
-	 * because those rows are visually indented.
-	 *
-	 * @param {string}  key                  Column key.
-	 * @param {number}  index                Column index.
-	 * @param {boolean} hasVisibleVariations Whether variation rows are visible.
-	 * @returns {number}
-	 */
-	function getColumnFloorWidth( key, index, hasVisibleVariations ) {
-		let min = 96;
-
-		if ( 'name' === key ) {
-			min = 180;
-		} else if ( 'attributes' === key || 0 === String( key ).indexOf( 'meta::' ) ) {
-			min = 200;
-		} else if ( 'short_description' === key || 'description' === key ) {
-			min = 160;
-		} else if ( 'categories' === key || 'tags' === key ) {
-			min = 170;
-		}
-
-		if ( 0 === index && hasVisibleVariations ) {
-			min += 28;
-		}
-
-		return min;
-	}
-
-	/**
-	 * Ensure current column widths are never narrower than overlap-safe floors.
-	 * This keeps dynamic sizing while preventing control collisions.
-	 */
-	function syncColumnWidthsForContent() {
-		const $cols = $( '#spread-em-colgroup col' );
-		if ( ! $cols.length ) {
-			return;
-		}
-
-		const hasVisibleVariations = $( '#spread-em-tbody tr.spread-em-variation-row:visible' ).length > 0;
-		let changed = false;
-
-		$cols.each( function ( index ) {
-			const key = String( $( this ).attr( 'data-key' ) || '' );
-			if ( ! key ) {
-				return;
-			}
-
-			const current = parseInt( $( this ).css( 'width' ), 10 ) || 0;
-			const floor = getColumnFloorWidth( key, index, hasVisibleVariations );
-			const next = Math.max( current, floor );
-
-			if ( next !== current ) {
-				$( this ).css( 'width', next + 'px' );
-				changed = true;
-			}
-		} );
-
-		if ( changed ) {
-			saveColumnWidths();
-		}
 	}
 
 	/** -----------------------------------------------------------------------

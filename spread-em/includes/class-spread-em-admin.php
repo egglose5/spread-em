@@ -89,9 +89,33 @@ class SpreadEm_Admin {
 		);
 
 		wp_enqueue_script(
+			'spread-em-editor-fields',
+			SPREAD_EM_PLUGIN_URL . 'assets/js/spread-em-editor-fields.js',
+			[ 'jquery' ],
+			SPREAD_EM_VERSION,
+			true
+		);
+
+		wp_enqueue_script(
+			'spread-em-editor-layout',
+			SPREAD_EM_PLUGIN_URL . 'assets/js/spread-em-editor-layout.js',
+			[ 'jquery' ],
+			SPREAD_EM_VERSION,
+			true
+		);
+
+		wp_enqueue_script(
+			'spread-em-editor-im',
+			SPREAD_EM_PLUGIN_URL . 'assets/js/spread-em-editor-im.js',
+			[ 'jquery' ],
+			SPREAD_EM_VERSION,
+			true
+		);
+
+		wp_enqueue_script(
 			'spread-em-editor',
 			SPREAD_EM_PLUGIN_URL . 'assets/js/spread-em-editor.js',
-			[ 'jquery' ],
+			[ 'jquery', 'spread-em-editor-fields', 'spread-em-editor-layout', 'spread-em-editor-im' ],
 			SPREAD_EM_VERSION,
 			true // Load in footer.
 		);
@@ -149,6 +173,14 @@ class SpreadEm_Admin {
 					'im_active_users'  => __( 'Active users', 'spread-em' ),
 					'im_no_active_users' => __( 'No other active users right now.', 'spread-em' ),
 					'im_open'          => __( 'Open IM', 'spread-em' ),
+					'operator_activity_title' => __( 'Live Operator Console', 'spread-em' ),
+					'operator_activity_active' => __( 'Active editors', 'spread-em' ),
+					'operator_activity_events' => __( 'Recent activity', 'spread-em' ),
+					'operator_activity_none' => __( 'No live activity yet.', 'spread-em' ),
+					'operator_activity_editing_rows' => __( 'editing %d row(s)', 'spread-em' ),
+					'operator_activity_scope_global' => __( 'Global operator', 'spread-em' ),
+					'operator_activity_scope_contributor' => __( 'Contributor scope', 'spread-em' ),
+					'module_missing' => __( 'Some editor modules failed to load. Limited fallback mode is active.', 'spread-em' ),
 				],
 			]
 		);

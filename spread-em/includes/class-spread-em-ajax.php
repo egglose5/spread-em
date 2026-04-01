@@ -32,6 +32,9 @@ class SpreadEm_Ajax {
 	/** @var string User meta key containing live workspace scope. */
 	const LIVE_SCOPE_META_KEY = 'spread_em_live_scope';
 
+	/** @var int Max activity events retained in live state. */
+	const LIVE_ACTIVITY_MAX = 120;
+
 	/**
 	 * Register AJAX hooks (logged-in users only).
 	 */
@@ -62,8 +65,9 @@ class SpreadEm_Ajax {
 		}
 
 		// 3. Decode and validate the changes payload.
-		$raw_changes = isset( $_POST['changes'] ) ? wp_unslash( $_POST['changes'] ) : '';
-		$changes     = json_decode( $raw_changes, true );
+		$raw_changes     = isset( $_POST['changes'] ) ? wp_unslash( $_POST['changes'] ) : '';
+		$changes         = json_decode( $raw_changes, true );
+		$live_session_id = isset( $_POST['live_session_id'] ) ? sanitize_key( wp_unslash( $_POST['live_session_id'] ) ) : '';
 
 		if ( ! is_array( $changes ) || empty( $changes ) ) {
 			wp_send_json_error( [ 'message' => __( 'No changes received.', 'spread-em' ) ], 400 );
@@ -139,6 +143,24 @@ class SpreadEm_Ajax {
 		$parent_ids = self::get_context_parent_ids( $saved );
 		$products   = [];
 
+		if ( '' !== $live_session_id && ! empty( $saved ) ) {
+			$state = self::get_live_state( $live_session_id );
+			$state['activity'] = isset( $state['activity'] ) && is_array( $state['activity'] ) ? $state['activity'] : [];
+			$state['activity'] = self::append_live_activity_event(
+				$state['activity'],
+				[
+					'type'          => 'save',
+					'user_id'       => get_current_user_id(),
+					'user_name'     => self::get_current_editor_name(),
+					'save_state_id' => $save_state_id,
+					'rows'          => count( $saved ),
+					'ts'            => time(),
+				]
+			);
+			$state['updated_at'] = current_time( 'mysql', true );
+			self::save_live_state( $live_session_id, $state );
+		}
+
 		if ( class_exists( 'SpreadEm_Admin' ) && method_exists( 'SpreadEm_Admin', 'get_products_for_editor' ) ) {
 			$products = SpreadEm_Admin::get_products_for_editor( $parent_ids );
 		}
@@ -194,7 +216,13 @@ class SpreadEm_Ajax {
 			$state['row_owners'] = [];
 		}
 
-		$state['row_owners'] = self::touch_live_row_owner( $state['row_owners'], $product_id );
+		if ( 'claim' === $mode ) {
+			$state['row_owners'] = self::touch_live_row_owner( $state['row_owners'], $product_id );
+		}
+
+		if ( ! isset( $state['activity'] ) || ! is_array( $state['activity'] ) ) {
+			$state['activity'] = [];
+		}
 
 		if ( 'claim' !== $mode ) {
 			if ( ! isset( $state['cells'][ $product_id ] ) || ! is_array( $state['cells'][ $product_id ] ) ) {
@@ -203,6 +231,28 @@ class SpreadEm_Ajax {
 
 			$state['cells'][ $product_id ][ $key ] = $value;
 			$state['version'] = isset( $state['version'] ) ? ( (int) $state['version'] + 1 ) : 1;
+			$state['activity'] = self::append_live_activity_event(
+				$state['activity'],
+				[
+					'type'       => 'edit',
+					'user_id'    => get_current_user_id(),
+					'user_name'  => self::get_current_editor_name(),
+					'product_id' => $product_id,
+					'field'      => $key,
+					'ts'         => time(),
+				]
+			);
+		} else {
+			$state['activity'] = self::append_live_activity_event(
+				$state['activity'],
+				[
+					'type'       => 'claim',
+					'user_id'    => get_current_user_id(),
+					'user_name'  => self::get_current_editor_name(),
+					'product_id' => $product_id,
+					'ts'         => time(),
+				]
+			);
 		}
 
 		if ( ! isset( $state['version'] ) ) {
@@ -210,11 +260,13 @@ class SpreadEm_Ajax {
 		}
 		$state['updated_at'] = current_time( 'mysql', true );
 
-		$presence = isset( $state['presence'] ) && is_array( $state['presence'] ) ? $state['presence'] : [];
+		$presence      = isset( $state['presence'] ) && is_array( $state['presence'] ) ? $state['presence'] : [];
+		$current_scope = self::get_current_user_live_scope();
 		$presence = self::prune_live_presence( $presence );
 		$presence[ get_current_user_id() ] = [
-			'name' => self::get_current_editor_name(),
-			'ts'   => time(),
+			'name'       => self::get_current_editor_name(),
+			'ts'         => time(),
+			'scope_mode' => isset( $current_scope['scope_mode'] ) ? (string) $current_scope['scope_mode'] : 'individual_contributor',
 		];
 		$state['presence'] = $presence;
 
@@ -251,12 +303,16 @@ class SpreadEm_Ajax {
 		$state['row_owners'] = self::filter_live_row_owners_for_current_user( $state['row_owners'] );
 		$state['direct_messages'] = isset( $state['direct_messages'] ) && is_array( $state['direct_messages'] ) ? $state['direct_messages'] : [];
 		$state['direct_messages'] = self::prune_live_direct_messages( $state['direct_messages'] );
+		$state['activity'] = isset( $state['activity'] ) && is_array( $state['activity'] ) ? $state['activity'] : [];
+		$state['activity'] = self::prune_live_activity( $state['activity'] );
 
-		$presence = isset( $state['presence'] ) && is_array( $state['presence'] ) ? $state['presence'] : [];
+		$presence      = isset( $state['presence'] ) && is_array( $state['presence'] ) ? $state['presence'] : [];
+		$current_scope = self::get_current_user_live_scope();
 		$presence = self::prune_live_presence( $presence );
 		$presence[ get_current_user_id() ] = [
-			'name' => self::get_current_editor_name(),
-			'ts'   => time(),
+			'name'       => self::get_current_editor_name(),
+			'ts'         => time(),
+			'scope_mode' => isset( $current_scope['scope_mode'] ) ? (string) $current_scope['scope_mode'] : 'individual_contributor',
 		];
 		$state['presence'] = $presence;
 
@@ -271,6 +327,7 @@ class SpreadEm_Ajax {
 				'cells'       => $has_updates ? $state['cells'] : [],
 				'row_owners'  => $state['row_owners'],
 				'direct_messages' => self::filter_live_direct_messages_for_current_user( $state['direct_messages'] ),
+				'activity'    => self::filter_live_activity_for_current_user( $state['activity'] ),
 				'presence'    => $state['presence'],
 			]
 		);
@@ -318,6 +375,18 @@ class SpreadEm_Ajax {
 		];
 
 		$state['direct_messages'] = self::prune_live_direct_messages( $state['direct_messages'] );
+		$state['activity'] = isset( $state['activity'] ) && is_array( $state['activity'] ) ? $state['activity'] : [];
+		$state['activity'] = self::append_live_activity_event(
+			$state['activity'],
+			[
+				'type'         => 'im',
+				'user_id'      => get_current_user_id(),
+				'user_name'    => self::get_current_editor_name(),
+				'to_user_id'   => $to_user_id,
+				'to_user_name' => isset( $presence[ $to_user_id ]['name'] ) ? (string) $presence[ $to_user_id ]['name'] : '',
+				'ts'           => time(),
+			]
+		);
 		$state['presence'] = $presence;
 		self::save_live_state( $session_id, $state );
 
@@ -514,6 +583,105 @@ class SpreadEm_Ajax {
 	}
 
 	/**
+	 * Append one activity event and keep the feed bounded.
+	 *
+	 * @param array<int,mixed>    $activity Existing activity feed.
+	 * @param array<string,mixed> $event    New event payload.
+	 * @return array<int,mixed>
+	 */
+	private static function append_live_activity_event( array $activity, array $event ): array {
+		$activity = self::prune_live_activity( $activity );
+
+		$activity[] = [
+			'id'           => sanitize_key( wp_generate_uuid4() ),
+			'type'         => isset( $event['type'] ) ? sanitize_key( (string) $event['type'] ) : 'activity',
+			'user_id'      => isset( $event['user_id'] ) ? absint( (int) $event['user_id'] ) : 0,
+			'user_name'    => isset( $event['user_name'] ) ? (string) $event['user_name'] : '',
+			'product_id'   => isset( $event['product_id'] ) ? absint( (int) $event['product_id'] ) : 0,
+			'field'        => isset( $event['field'] ) ? sanitize_text_field( (string) $event['field'] ) : '',
+			'save_state_id'=> isset( $event['save_state_id'] ) ? sanitize_key( (string) $event['save_state_id'] ) : '',
+			'rows'         => isset( $event['rows'] ) ? absint( (int) $event['rows'] ) : 0,
+			'to_user_id'   => isset( $event['to_user_id'] ) ? absint( (int) $event['to_user_id'] ) : 0,
+			'to_user_name' => isset( $event['to_user_name'] ) ? (string) $event['to_user_name'] : '',
+			'ts'           => isset( $event['ts'] ) ? absint( (int) $event['ts'] ) : time(),
+		];
+
+		return array_slice( $activity, -1 * self::LIVE_ACTIVITY_MAX );
+	}
+
+	/**
+	 * Prune stale activity and normalize structure.
+	 *
+	 * @param array<int,mixed> $activity Activity list.
+	 * @return array<int,mixed>
+	 */
+	private static function prune_live_activity( array $activity ): array {
+		$cutoff = time() - ( 30 * MINUTE_IN_SECONDS );
+		$clean  = [];
+
+		foreach ( $activity as $event ) {
+			if ( ! is_array( $event ) || empty( $event['ts'] ) || (int) $event['ts'] < $cutoff ) {
+				continue;
+			}
+
+			$clean[] = [
+				'id'            => isset( $event['id'] ) ? sanitize_key( (string) $event['id'] ) : sanitize_key( wp_generate_uuid4() ),
+				'type'          => isset( $event['type'] ) ? sanitize_key( (string) $event['type'] ) : 'activity',
+				'user_id'       => isset( $event['user_id'] ) ? absint( (int) $event['user_id'] ) : 0,
+				'user_name'     => isset( $event['user_name'] ) ? (string) $event['user_name'] : '',
+				'product_id'    => isset( $event['product_id'] ) ? absint( (int) $event['product_id'] ) : 0,
+				'field'         => isset( $event['field'] ) ? sanitize_text_field( (string) $event['field'] ) : '',
+				'save_state_id' => isset( $event['save_state_id'] ) ? sanitize_key( (string) $event['save_state_id'] ) : '',
+				'rows'          => isset( $event['rows'] ) ? absint( (int) $event['rows'] ) : 0,
+				'to_user_id'    => isset( $event['to_user_id'] ) ? absint( (int) $event['to_user_id'] ) : 0,
+				'to_user_name'  => isset( $event['to_user_name'] ) ? (string) $event['to_user_name'] : '',
+				'ts'            => (int) $event['ts'],
+			];
+		}
+
+		return array_slice( $clean, -1 * self::LIVE_ACTIVITY_MAX );
+	}
+
+	/**
+	 * Filter activity feed down to current user's visible scope.
+	 *
+	 * @param array<int,mixed> $activity Activity list.
+	 * @return array<int,mixed>
+	 */
+	private static function filter_live_activity_for_current_user( array $activity ): array {
+		$scope = self::get_current_user_live_scope();
+
+		if ( ! empty( $scope['full_workspace'] ) ) {
+			return $activity;
+		}
+
+		$allowed_ids = array_flip( $scope['product_ids'] );
+		$current_id  = get_current_user_id();
+		$filtered    = [];
+
+		foreach ( $activity as $event ) {
+			if ( ! is_array( $event ) ) {
+				continue;
+			}
+
+			$event_product_id = isset( $event['product_id'] ) ? absint( (int) $event['product_id'] ) : 0;
+			$event_user_id    = isset( $event['user_id'] ) ? absint( (int) $event['user_id'] ) : 0;
+			$event_to_user_id = isset( $event['to_user_id'] ) ? absint( (int) $event['to_user_id'] ) : 0;
+
+			if ( $event_product_id && isset( $allowed_ids[ $event_product_id ] ) ) {
+				$filtered[] = $event;
+				continue;
+			}
+
+			if ( $event_user_id === $current_id || $event_to_user_id === $current_id ) {
+				$filtered[] = $event;
+			}
+		}
+
+		return $filtered;
+	}
+
+	/**
 	 * Return only direct messages involving the current user.
 	 *
 	 * @param array<int,mixed> $messages Direct message list.
@@ -600,8 +768,9 @@ class SpreadEm_Ajax {
 			}
 
 			$clean[ $user_id ] = [
-				'name' => isset( $entry['name'] ) ? (string) $entry['name'] : '',
-				'ts'   => (int) $entry['ts'],
+				'name'       => isset( $entry['name'] ) ? (string) $entry['name'] : '',
+				'ts'         => (int) $entry['ts'],
+				'scope_mode' => isset( $entry['scope_mode'] ) ? sanitize_key( (string) $entry['scope_mode'] ) : 'individual_contributor',
 			];
 		}
 

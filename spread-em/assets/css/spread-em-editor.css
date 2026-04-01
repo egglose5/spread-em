@@ -63,6 +63,110 @@
 }
 
 /* --------------------------------------------------------------------------
+   Global operator live console
+   -------------------------------------------------------------------------- */
+
+.spread-em-operator-console {
+	margin: 0 0 14px;
+	border: 1px solid #c3c4c7;
+	border-radius: 6px;
+	background: #ffffff;
+	overflow: hidden;
+}
+
+.spread-em-operator-console__header {
+	padding: 10px 12px;
+	background: #1d2327;
+	color: #ffffff;
+	font-size: 13px;
+	font-weight: 700;
+	letter-spacing: 0.02em;
+}
+
+.spread-em-operator-console__body {
+	display: grid;
+	grid-template-columns: 1fr 1fr;
+	gap: 0;
+}
+
+.spread-em-operator-console__column {
+	min-width: 0;
+	padding: 10px 12px;
+}
+
+.spread-em-operator-console__column + .spread-em-operator-console__column {
+	border-left: 1px solid #e2e4e7;
+}
+
+.spread-em-operator-console__title {
+	margin: 0 0 8px;
+	font-size: 12px;
+	line-height: 1.2;
+	font-weight: 700;
+	color: #1d2327;
+	text-transform: uppercase;
+	letter-spacing: 0.04em;
+}
+
+.spread-em-operator-console__users,
+.spread-em-operator-console__events {
+	max-height: 180px;
+	overflow-y: auto;
+	padding-right: 4px;
+}
+
+.spread-em-operator-console__empty {
+	font-size: 12px;
+	color: #646970;
+	padding: 10px 0;
+}
+
+.spread-em-operator-user-card {
+	padding: 8px 10px;
+	border: 1px solid #e2e4e7;
+	border-radius: 5px;
+	background: #f8f9fb;
+	margin-bottom: 8px;
+}
+
+.spread-em-operator-user-card__name {
+	font-size: 13px;
+	font-weight: 600;
+	color: #1d2327;
+	margin-bottom: 3px;
+}
+
+.spread-em-operator-user-card__meta {
+	font-size: 12px;
+	color: #50575e;
+	line-height: 1.35;
+}
+
+.spread-em-operator-user-card__im {
+	margin-top: 6px;
+}
+
+.spread-em-operator-event {
+	padding: 8px 10px;
+	border: 1px solid #e2e4e7;
+	border-radius: 5px;
+	background: #ffffff;
+	margin-bottom: 8px;
+}
+
+.spread-em-operator-event__body {
+	font-size: 12px;
+	color: #1d2327;
+	line-height: 1.4;
+}
+
+.spread-em-operator-event__time {
+	margin-top: 4px;
+	font-size: 11px;
+	color: #646970;
+}
+
+/* --------------------------------------------------------------------------
    Table container – horizontal scroll
    -------------------------------------------------------------------------- */
 
@@ -473,6 +577,15 @@ body.spread-em-col-resizing * {
    -------------------------------------------------------------------------- */
 
 @media screen and (max-width: 782px) {
+	.spread-em-operator-console__body {
+		grid-template-columns: 1fr;
+	}
+
+	.spread-em-operator-console__column + .spread-em-operator-console__column {
+		border-left: none;
+		border-top: 1px solid #e2e4e7;
+	}
+
 	.spread-em-im-window {
 		right: 16px;
 		left: 16px;
