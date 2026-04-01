@@ -13,6 +13,7 @@ The core idea is simple: keep WooCommerce's existing catalogue and product data 
 ## Features
 
 - **Spreadsheet view for existing WooCommerce data** — use the catalogue flow you already know, but open the selected products in one editable table with name, SKU, price, sale price, stock, weight, dimensions, status, visibility, categories, tags, attributes, description, and more
+- **Parent category filter includes child categories** — when filtering products in the WooCommerce admin catalogue, selecting a parent product category also includes products assigned to descendant categories
 - **Variable products + variations** — parent and all child variations load together; variation-only fields (price, stock, SKU) are editable; inherited fields (name, categories) are shown read-only on children
 - **Per-column override** — type a value once and push it to every visible row with one click
 - **Custom meta columns** — non-protected custom meta fields automatically appear as individual editable columns, just like a WooCommerce CSV export
@@ -54,6 +55,14 @@ The core idea is simple: keep WooCommerce's existing catalogue and product data 
 | WordPress | 6.0+ |
 | WooCommerce | 7.0+ |
 | PHP | 8.0+ |
+
+---
+
+## Compatibility Notes
+
+- **WooCommerce admin category filtering is intentionally adjusted** — by default, WooCommerce's admin product category filter matches only the exact selected term. Spread'em changes that behavior so selecting a parent category also includes products assigned to its child categories.
+- **Why this matters** — the spreadsheet editor is launched from the existing WooCommerce product catalogue selection flow, so this change helps parent-category selection behave the way many store owners expect when preparing a bulk edit.
+- **Compatibility implication** — if another plugin depends on the default exact-match-only behavior of the admin `product_cat` filter on the product list screen, test that interaction. Spread'em applies this change only in the admin main product query.
 
 ---
 
