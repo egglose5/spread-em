@@ -61,9 +61,8 @@ Non-protected custom meta fields are surfaced as editable columns.
 
 == Screenshots ==
 
-1. Product selection from WooCommerce product list
-2. Spreadsheet editor with inline editing
-3. Variation rows and column override actions
+1. WooCommerce product list with Spread Em available in Bulk actions.
+2. Spread Em spreadsheet editor with inline product editing.
 
 == Changelog ==
 
