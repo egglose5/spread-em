@@ -23,12 +23,16 @@ class SpreadEm_Log_Page {
 	/** @var string AJAX action name for reverting a change. */
 	const REVERT_ACTION = 'spread_em_revert';
 
+	/** @var string AJAX action name for reverting an entire save state. */
+	const REVERT_SAVE_ACTION = 'spread_em_revert_save_state';
+
 	/**
 	 * Register WordPress hooks.
 	 */
 	public static function init(): void {
 		add_action( 'admin_menu', [ __CLASS__, 'register_page' ] );
 		add_action( 'wp_ajax_' . self::REVERT_ACTION, [ __CLASS__, 'handle_revert' ] );
+		add_action( 'wp_ajax_' . self::REVERT_SAVE_ACTION, [ __CLASS__, 'handle_revert_save_state' ] );
 	}
 
 	/**
@@ -72,6 +76,12 @@ class SpreadEm_Log_Page {
 			$filter_args['user_id'] = absint( $_GET['user_id'] );
 		}
 
+		// phpcs:ignore WordPress.Security.NonceVerification.Recommended
+		if ( ! empty( $_GET['save_state_id'] ) ) {
+			// phpcs:ignore WordPress.Security.NonceVerification.Recommended
+			$filter_args['save_state_id'] = sanitize_key( wp_unslash( $_GET['save_state_id'] ) );
+		}
+
 		$entries      = SpreadEm_Logger::get_entries( $filter_args );
 		$total        = SpreadEm_Logger::count_entries( $filter_args );
 		$total_pages  = (int) ceil( $total / $per_page );
@@ -96,6 +106,7 @@ class SpreadEm_Log_Page {
 					<thead>
 						<tr>
 							<th style="width:50px;"><?php esc_html_e( 'ID', 'spread-em' ); ?></th>
+							<th style="width:130px;"><?php esc_html_e( 'Save State', 'spread-em' ); ?></th>
 							<th style="width:150px;"><?php esc_html_e( 'Date', 'spread-em' ); ?></th>
 							<th style="width:120px;"><?php esc_html_e( 'User', 'spread-em' ); ?></th>
 							<th style="width:160px;"><?php esc_html_e( 'Product', 'spread-em' ); ?></th>
@@ -108,6 +119,7 @@ class SpreadEm_Log_Page {
 					</thead>
 					<tbody>
 						<?php foreach ( $entries as $entry ) :
+							$save_state_id = ! empty( $entry['save_state_id'] ) ? (string) $entry['save_state_id'] : '';
 							$user_info    = get_userdata( (int) $entry['user_id'] );
 							$user_label   = $user_info
 								? '<a href="' . esc_url( get_edit_user_link( (int) $entry['user_id'] ) ) . '">' . esc_html( $user_info->display_name ) . '</a>'
@@ -121,6 +133,13 @@ class SpreadEm_Log_Page {
 						<tr id="spread-em-log-row-<?php echo (int) $entry['id']; ?>"
 							<?php echo $is_reverted ? 'style="opacity:0.6;"' : ''; ?>>
 							<td><?php echo (int) $entry['id']; ?></td>
+							<td>
+								<?php if ( '' !== $save_state_id ) : ?>
+									<code><?php echo esc_html( substr( $save_state_id, 0, 8 ) ); ?></code>
+								<?php else : ?>
+									&mdash;
+								<?php endif; ?>
+							</td>
 							<td><?php echo esc_html( get_date_from_gmt( $entry['changed_at'], get_option( 'date_format' ) . ' ' . get_option( 'time_format' ) ) ); ?></td>
 							<td><?php echo $user_label; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped ?></td>
 							<td><?php echo $product_link; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped ?></td>
@@ -143,6 +162,15 @@ class SpreadEm_Log_Page {
 										data-confirm="<?php esc_attr_e( 'Revert this change? The old value will be restored.', 'spread-em' ); ?>">
 										<?php esc_html_e( 'Revert', 'spread-em' ); ?>
 									</button>
+									<?php if ( '' !== $save_state_id ) : ?>
+										<button type="button"
+											class="button button-small spread-em-revert-save-btn"
+											data-save-state-id="<?php echo esc_attr( $save_state_id ); ?>"
+											data-nonce="<?php echo esc_attr( $revert_nonce ); ?>"
+											data-confirm="<?php esc_attr_e( 'Revert this entire save state? All its field changes will be restored.', 'spread-em' ); ?>">
+											<?php esc_html_e( 'Revert Save', 'spread-em' ); ?>
+										</button>
+									<?php endif; ?>
 								<?php else : ?>
 									&mdash;
 								<?php endif; ?>
@@ -206,6 +234,44 @@ class SpreadEm_Log_Page {
 					$btn.prop('disabled', false).text(<?php echo wp_json_encode( __( 'Revert', 'spread-em' ) ); ?>);
 				});
 			});
+
+			$('.spread-em-revert-save-btn').on('click', function () {
+				var $btn = $(this);
+				var saveStateId = $btn.data('save-state-id');
+				var nonce = $btn.data('nonce');
+				var msg = $btn.data('confirm');
+
+				if (!confirm(msg)) {
+					return;
+				}
+
+				$btn.prop('disabled', true).text(<?php echo wp_json_encode( __( 'Reverting…', 'spread-em' ) ); ?>);
+
+				$.post(
+					<?php echo wp_json_encode( admin_url( 'admin-ajax.php' ) ); ?>,
+					{
+						action: <?php echo wp_json_encode( self::REVERT_SAVE_ACTION ); ?>,
+						nonce: nonce,
+						save_state_id: saveStateId
+					},
+					function (response) {
+						if (response.success) {
+							window.location.reload();
+							return;
+						}
+
+						alert(
+							response.data && response.data.message
+								? response.data.message
+								: <?php echo wp_json_encode( __( 'Revert failed. Please try again.', 'spread-em' ) ); ?>
+						);
+						$btn.prop('disabled', false).text(<?php echo wp_json_encode( __( 'Revert Save', 'spread-em' ) ); ?>);
+					}
+				).fail(function () {
+					alert(<?php echo wp_json_encode( __( 'Revert failed. Please try again.', 'spread-em' ) ); ?>);
+					$btn.prop('disabled', false).text(<?php echo wp_json_encode( __( 'Revert Save', 'spread-em' ) ); ?>);
+				});
+			});
 		}(jQuery));
 		</script>
 		<?php
@@ -230,6 +296,12 @@ class SpreadEm_Log_Page {
 				</label>
 				<input type="number" id="spread-em-log-user" name="user_id" min="1"
 					value="<?php echo ! empty( $current_filters['user_id'] ) ? (int) $current_filters['user_id'] : ''; ?>">
+
+				<label for="spread-em-log-save-state" style="margin-left:10px;">
+					<?php esc_html_e( 'Save State:', 'spread-em' ); ?>
+				</label>
+				<input type="text" id="spread-em-log-save-state" name="save_state_id"
+					value="<?php echo ! empty( $current_filters['save_state_id'] ) ? esc_attr( (string) $current_filters['save_state_id'] ) : ''; ?>">
 
 				<input type="submit" class="button" value="<?php esc_attr_e( 'Filter', 'spread-em' ); ?>">
 				<a href="<?php echo esc_url( admin_url( 'admin.php?page=' . self::PAGE_SLUG ) ); ?>" class="button">
@@ -260,6 +332,10 @@ class SpreadEm_Log_Page {
 
 		if ( ! empty( $filters['user_id'] ) ) {
 			$base_url = add_query_arg( 'user_id', (int) $filters['user_id'], $base_url );
+		}
+
+		if ( ! empty( $filters['save_state_id'] ) ) {
+			$base_url = add_query_arg( 'save_state_id', sanitize_key( (string) $filters['save_state_id'] ), $base_url );
 		}
 
 		echo '<div class="tablenav bottom"><div class="tablenav-pages">';
@@ -345,5 +421,110 @@ class SpreadEm_Log_Page {
 		SpreadEm_Logger::mark_reverted( $log_id );
 
 		wp_send_json_success( [ 'log_id' => $log_id ] );
+	}
+
+	/**
+	 * AJAX handler to revert all entries in one save state.
+	 */
+	public static function handle_revert_save_state(): void {
+		if ( ! check_ajax_referer( 'spread_em_revert_nonce', 'nonce', false ) ) {
+			wp_send_json_error( [ 'message' => __( 'Security check failed.', 'spread-em' ) ], 403 );
+		}
+
+		if ( ! current_user_can( 'edit_products' ) ) {
+			wp_send_json_error( [ 'message' => __( 'You do not have permission to revert changes.', 'spread-em' ) ], 403 );
+		}
+
+		$save_state_id = isset( $_POST['save_state_id'] ) ? sanitize_key( wp_unslash( $_POST['save_state_id'] ) ) : '';
+
+		if ( '' === $save_state_id ) {
+			wp_send_json_error( [ 'message' => __( 'Invalid save state ID.', 'spread-em' ) ], 400 );
+		}
+
+		$entries = SpreadEm_Logger::get_entries_by_save_state( $save_state_id );
+
+		if ( empty( $entries ) ) {
+			wp_send_json_error( [ 'message' => __( 'No entries found for this save state.', 'spread-em' ) ], 404 );
+		}
+
+		$active_entries = array_values(
+			array_filter(
+				$entries,
+				static function ( $entry ) {
+					return isset( $entry['reverted'] ) && ! (bool) $entry['reverted'];
+				}
+			)
+		);
+
+		if ( empty( $active_entries ) ) {
+			wp_send_json_error( [ 'message' => __( 'This save state has already been reverted.', 'spread-em' ) ], 409 );
+		}
+
+		$reverted_count  = 0;
+		$error_messages  = [];
+		$revert_state_id = sanitize_key( wp_generate_uuid4() );
+
+		foreach ( $active_entries as $entry ) {
+			$product_id = isset( $entry['product_id'] ) ? (int) $entry['product_id'] : 0;
+			$field      = isset( $entry['field'] ) ? (string) $entry['field'] : '';
+			$old_value  = isset( $entry['old_value'] ) ? (string) $entry['old_value'] : '';
+			$new_value  = isset( $entry['new_value'] ) ? (string) $entry['new_value'] : '';
+			$entry_id   = isset( $entry['id'] ) ? (int) $entry['id'] : 0;
+
+			if ( ! $product_id || '' === $field || ! $entry_id ) {
+				$error_messages[] = __( 'One log entry was invalid and could not be reverted.', 'spread-em' );
+				continue;
+			}
+
+			$product = wc_get_product( $product_id );
+
+			if ( ! $product ) {
+				/* translators: %d: product ID */
+				$error_messages[] = sprintf( __( 'Product %d not found while reverting save state.', 'spread-em' ), $product_id );
+				continue;
+			}
+
+			$row = [
+				'id'    => $product_id,
+				$field  => $old_value,
+			];
+
+			$result = SpreadEm_Ajax::apply_row_to_product( $product, $row );
+
+			if ( is_wp_error( $result ) ) {
+				/* translators: %1$s: field name, %2$s: error message */
+				$error_messages[] = sprintf( __( 'Field %1$s failed to revert: %2$s', 'spread-em' ), $field, $result->get_error_message() );
+				continue;
+			}
+
+			SpreadEm_Logger::log_change(
+				get_current_user_id(),
+				$product_id,
+				$field,
+				$new_value,
+				$old_value,
+				$revert_state_id
+			);
+
+			SpreadEm_Logger::mark_reverted( $entry_id );
+			$reverted_count++;
+		}
+
+		if ( ! empty( $error_messages ) ) {
+			wp_send_json_error(
+				[
+					'message'  => implode( "\n", array_unique( $error_messages ) ),
+					'reverted' => $reverted_count,
+				],
+				422
+			);
+		}
+
+		wp_send_json_success(
+			[
+				'save_state_id' => $save_state_id,
+				'reverted'      => $reverted_count,
+			]
+		);
 	}
 }

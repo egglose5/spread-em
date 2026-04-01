@@ -62,6 +62,8 @@ function spread_em_init(): void {
 	require_once SPREAD_EM_PLUGIN_DIR . 'includes/class-spread-em-ajax.php';
 	require_once SPREAD_EM_PLUGIN_DIR . 'includes/class-spread-em-log-page.php';
 
+	SpreadEm_Logger::ensure_schema();
+
 	SpreadEm_Admin::init();
 	SpreadEm_Ajax::init();
 	SpreadEm_Log_Page::init();

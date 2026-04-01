@@ -55,6 +55,7 @@ class SpreadEm_Ajax {
 		}
 
 		// 4. Process each changed row.
+		$save_state_id = sanitize_key( wp_generate_uuid4() );
 		$saved  = [];
 		$errors = [];
 
@@ -95,7 +96,7 @@ class SpreadEm_Ajax {
 						foreach ( $old_snapshot as $field => $old_value ) {
 							$new_value = isset( $new_snapshot[ $field ] ) ? $new_snapshot[ $field ] : '';
 							if ( $old_value !== $new_value ) {
-								SpreadEm_Logger::log_change( $user_id, $product_id, $field, $old_value, $new_value );
+								SpreadEm_Logger::log_change( $user_id, $product_id, $field, $old_value, $new_value, $save_state_id );
 							}
 						}
 					}
@@ -122,8 +123,9 @@ class SpreadEm_Ajax {
 
 		wp_send_json_success(
 			[
-				'saved'    => $saved,
-				'products' => $products,
+				'saved'          => $saved,
+				'products'       => $products,
+				'save_state_id'  => $save_state_id,
 			]
 		);
 	}
