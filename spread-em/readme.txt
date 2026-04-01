@@ -4,7 +4,7 @@ Tags: woocommerce, products, bulk edit, spreadsheet, inventory
 Requires at least: 6.0
 Tested up to: 6.9.1
 Requires PHP: 8.0
-Stable tag: 1.0.0
+Stable tag: 1.01
 License: GPL-2.0-or-later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 Requires Plugins: woocommerce
@@ -27,6 +27,10 @@ Core features:
 * Drag-to-resize columns with persisted widths
 * Undo last change
 * Save only changed rows for smaller AJAX payloads
+* Change log with before/after field history for every save action
+* Save-state grouping so one save click can be reverted as a set
+* Revert single changes or an entire save state from WooCommerce > Spread Em Log
+* Log retention capped to the latest 15 entries for lightweight DB footprint
 
 Design approach:
 
@@ -59,12 +63,23 @@ Yes. Parent products and child variations are loaded together.
 
 Non-protected custom meta fields are surfaced as editable columns.
 
+= Can I roll back mistakes? =
+
+Yes. Each save records before/after values in a change log. You can revert one field change or revert an entire save state from WooCommerce > Spread Em Log.
+
 == Screenshots ==
 
 1. WooCommerce product list with Spread Em available in Bulk actions.
 2. Spread Em spreadsheet editor with inline product editing.
 
 == Changelog ==
+
+= 1.01 =
+* Added grouped save-state history for each Save All Changes action.
+* Added full save-state revert action in the Spread Em log page.
+* Added save-state filtering and visibility in the log table.
+* Added hard retention cap of 15 log entries to reduce DB growth.
+* Improved uninstall cleanup for log schema metadata.
 
 = 1.0.0 =
 * Initial public release.
@@ -74,6 +89,9 @@ Non-protected custom meta fields are surfaced as editable columns.
 * Custom meta columns and taxonomy editing.
 
 == Upgrade Notice ==
+
+= 1.01 =
+Adds save-state logging and revert tools with capped log retention.
 
 = 1.0.0 =
 Initial release.

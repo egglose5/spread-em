@@ -22,6 +22,10 @@ The core idea is simple: keep WooCommerce's existing catalogue and product data 
 - **Undo last change** — single-level undo for quick corrections
 - **Save only what changed** — only dirty rows are sent to the server, keeping AJAX payloads minimal
 - **Hide parent rows** — toggle to show variations only for cleaner editing of large catalogues
+- **Change log with before/after values** — every saved field change is recorded with old/new values, user, and timestamp
+- **Save-state rollback** — each Save click is grouped into a save state so you can revert an entire save action from the log page
+- **Per-change rollback** — revert individual field changes from the log table
+- **Lightweight retention cap** — log history is automatically pruned to the most recent 15 entries
 - **Zero dependencies beyond WooCommerce** — no external libraries, no SaaS, no telemetry
 
 ---
@@ -68,7 +72,8 @@ The core idea is simple: keep WooCommerce's existing catalogue and product data 
 
 ## Screenshots
 
-> *Coming soon — PRs welcome!*
+- `spread-em/screenshot-1.png` — WooCommerce product list with Spread Em in Bulk Actions
+- `spread-em/screenshot-2.png` — Spreadsheet editor with inline product editing
 
 ---
 
@@ -92,7 +97,7 @@ Pull requests are welcome. For major changes please open an issue first to discu
 ## Roadmap / Known TODOs
 
 - Better catalogue selection and filtering before opening the spreadsheet view: status, category, tag, stock status, price range, product type, date modified, and name/SKU search
-- WordPress.org plugin directory submission
+- WordPress.org plugin directory submission checklist completion
 - Screenshot / demo GIF in this README
 
 ---
