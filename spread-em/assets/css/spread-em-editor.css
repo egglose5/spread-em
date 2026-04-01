@@ -185,17 +185,17 @@
 
 .spread-em-table td[data-key="attributes"] .spread-em-cell-input,
 .spread-em-table td[data-key="attributes"] .spread-em-override-input {
-	min-width: 340px;
+	min-width: 200px;
 }
 
 .spread-em-table td[data-key^="meta::"] .spread-em-cell-input,
 .spread-em-table td[data-key^="meta::"] .spread-em-override-input {
-	min-width: 320px;
+	min-width: 200px;
 }
 
 .spread-em-table td[data-key="short_description"] .spread-em-cell-input,
 .spread-em-table td[data-key="description"] .spread-em-cell-input {
-	min-width: 120px;
+	min-width: 160px;
 }
 
 /* --------------------------------------------------------------------------
@@ -204,17 +204,20 @@
 
 .spread-em-override-row td {
 	background: #e8f0fe;
-	padding: 4px 5px;
+	padding: 4px 6px;
 	border-bottom: 2px solid #2271b1;
+	text-align: center;
 }
 
 .spread-em-override-input {
 	width: calc( 100% - 28px );
+	min-width: 90px;
 	padding: 3px 5px;
 	font-size: 12px;
 	border: 1px solid #aac;
 	border-radius: 2px;
 	box-sizing: border-box;
+	vertical-align: middle;
 }
 
 .spread-em-override-btn {
@@ -237,9 +240,17 @@
 
 .spread-em-taxonomy-picker {
 	position: relative;
-	display: flex;
+	display: inline-flex;
 	align-items: center;
+	justify-content: center;
+	flex-wrap: nowrap;
 	gap: 2px;
+	width: 100%;
+}
+
+.spread-em-taxonomy-picker .spread-em-override-input {
+	flex: 1 1 auto;
+	width: auto;
 }
 
 .spread-em-taxonomy-toggle {
@@ -334,7 +345,9 @@ body.spread-em-col-resizing * {
 
 @media screen and (max-width: 782px) {
 	#spread-em-toolbar {
-		flex-direction: column;
-		align-items: flex-start;
+		flex-direction: row;
+		align-items: center;
+		justify-content: flex-start;
+		flex-wrap: wrap;
 	}
 }
