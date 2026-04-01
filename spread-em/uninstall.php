@@ -2,11 +2,12 @@
 /**
  * Clean up plugin data during uninstall.
  *
- * Spread Em does not currently create plugin-owned options, tables, cron jobs,
- * or files, so there is nothing to remove here yet. This file exists to make
- * uninstall behavior explicit and to provide a single place for future cleanup.
+ * Drops the spread_em_log table that was created on activation.
  *
  * @package SpreadEm
  */
 
 defined( 'WP_UNINSTALL_PLUGIN' ) || exit;
+
+require_once plugin_dir_path( __FILE__ ) . 'includes/class-spread-em-logger.php';
+SpreadEm_Logger::drop_table();

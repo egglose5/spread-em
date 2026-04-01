@@ -643,7 +643,7 @@ class SpreadEm_Admin {
 	 * @param \WC_Product $product
 	 * @return string
 	 */
-	private static function get_product_attributes_summary( \WC_Product $product ): string {
+	public static function get_product_attributes_summary( \WC_Product $product ): string {
 		$parts = [];
 
 		foreach ( $product->get_attributes() as $attribute ) {
