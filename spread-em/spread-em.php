@@ -28,6 +28,15 @@ function spread_em_load_textdomain(): void {
 add_action( 'init', 'spread_em_load_textdomain' );
 
 /**
+ * Create the logging table on plugin activation.
+ */
+function spread_em_activate(): void {
+	require_once SPREAD_EM_PLUGIN_DIR . 'includes/class-spread-em-logger.php';
+	SpreadEm_Logger::create_table();
+}
+register_activation_hook( __FILE__, 'spread_em_activate' );
+
+/**
  * Check WooCommerce is active before doing anything.
  */
 function spread_em_check_dependencies(): void {
@@ -48,9 +57,12 @@ add_action( 'plugins_loaded', 'spread_em_check_dependencies' );
  * Initialise the plugin after WooCommerce is confirmed active.
  */
 function spread_em_init(): void {
+	require_once SPREAD_EM_PLUGIN_DIR . 'includes/class-spread-em-logger.php';
 	require_once SPREAD_EM_PLUGIN_DIR . 'includes/class-spread-em-admin.php';
 	require_once SPREAD_EM_PLUGIN_DIR . 'includes/class-spread-em-ajax.php';
+	require_once SPREAD_EM_PLUGIN_DIR . 'includes/class-spread-em-log-page.php';
 
 	SpreadEm_Admin::init();
 	SpreadEm_Ajax::init();
+	SpreadEm_Log_Page::init();
 }

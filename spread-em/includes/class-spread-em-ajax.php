@@ -73,6 +73,9 @@ class SpreadEm_Ajax {
 				continue;
 			}
 
+			// Snapshot the current field values before applying the change.
+			$old_snapshot = self::snapshot_product( $product, $row );
+
 			$result = self::apply_row_to_product( $product, $row );
 
 			if ( is_wp_error( $result ) ) {
@@ -80,6 +83,23 @@ class SpreadEm_Ajax {
 				$errors[] = sprintf( __( 'Product %1$d: %2$s', 'spread-em' ), $product_id, $result->get_error_message() );
 			} else {
 				$saved[] = $product_id;
+
+				// Log each field that actually changed.
+				if ( class_exists( 'SpreadEm_Logger' ) ) {
+					$user_id      = get_current_user_id();
+					$saved_product = wc_get_product( $product_id );
+
+					if ( $saved_product ) {
+						$new_snapshot = self::snapshot_product( $saved_product, $row );
+
+						foreach ( $old_snapshot as $field => $old_value ) {
+							$new_value = isset( $new_snapshot[ $field ] ) ? $new_snapshot[ $field ] : '';
+							if ( $old_value !== $new_value ) {
+								SpreadEm_Logger::log_change( $user_id, $product_id, $field, $old_value, $new_value );
+							}
+						}
+					}
+				}
 			}
 		}
 
@@ -156,7 +176,7 @@ class SpreadEm_Ajax {
 	 * @param array<string, mixed>  $row     Associative array of field values.
 	 * @return true|\WP_Error
 	 */
-	private static function apply_row_to_product( \WC_Product $product, array $row ) {
+	public static function apply_row_to_product( \WC_Product $product, array $row ) {
 		$is_variation = $product->is_type( 'variation' );
 
 		// Name and catalog visibility are inherited by variations – skip them.
@@ -505,5 +525,104 @@ class SpreadEm_Ajax {
 		}
 
 		return null;
+	}
+
+	/**
+	 * Snapshot the current values of every field present in a row payload.
+	 *
+	 * The 'id' key is excluded; all other keys in $row are read from the
+	 * product and returned as a field-name → string-value map.
+	 *
+	 * @param \WC_Product          $product Current product object.
+	 * @param array<string, mixed> $row     Row payload (field keys to snapshot).
+	 * @return array<string, string>
+	 */
+	private static function snapshot_product( \WC_Product $product, array $row ): array {
+		$snapshot = [];
+
+		foreach ( array_keys( $row ) as $field ) {
+			if ( 'id' === $field ) {
+				continue;
+			}
+
+			$snapshot[ $field ] = self::get_product_field_value( $product, $field );
+		}
+
+		return $snapshot;
+	}
+
+	/**
+	 * Read the current string value of a single editable field from a product.
+	 *
+	 * @param \WC_Product $product
+	 * @param string      $field   Column key (e.g. "regular_price", "meta::custom_key").
+	 * @return string
+	 */
+	private static function get_product_field_value( \WC_Product $product, string $field ): string {
+		switch ( $field ) {
+			case 'name':
+				return (string) $product->get_name();
+			case 'sku':
+				return (string) $product->get_sku();
+			case 'status':
+				return (string) $product->get_status();
+			case 'catalog_visibility':
+				return (string) $product->get_catalog_visibility();
+			case 'regular_price':
+				return (string) $product->get_regular_price();
+			case 'sale_price':
+				return (string) $product->get_sale_price();
+			case 'tax_status':
+				return (string) $product->get_tax_status();
+			case 'tax_class':
+				return (string) $product->get_tax_class();
+			case 'manage_stock':
+				return $product->get_manage_stock() ? 'yes' : 'no';
+			case 'stock_status':
+				return (string) $product->get_stock_status();
+			case 'stock_quantity':
+				$qty = $product->get_stock_quantity();
+				return null === $qty ? '' : (string) $qty;
+			case 'backorders':
+				return (string) $product->get_backorders();
+			case 'weight':
+				return (string) $product->get_weight();
+			case 'length':
+				return (string) $product->get_length();
+			case 'width':
+				return (string) $product->get_width();
+			case 'height':
+				return (string) $product->get_height();
+			case 'short_description':
+				return (string) $product->get_short_description();
+			case 'description':
+				return (string) $product->get_description();
+			case 'categories':
+				return wp_strip_all_tags( wc_get_product_category_list( $product->get_id(), ', ' ) );
+			case 'tags':
+				$tags = wp_get_post_terms( $product->get_id(), 'product_tag', [ 'fields' => 'names' ] );
+				return is_array( $tags ) ? implode( ', ', $tags ) : '';
+			case 'attributes':
+				return class_exists( 'SpreadEm_Admin' )
+					? SpreadEm_Admin::get_product_attributes_summary( $product )
+					: '';
+			default:
+				$meta_key = class_exists( 'SpreadEm_Admin' )
+					? SpreadEm_Admin::get_meta_key_from_column_key( $field )
+					: null;
+
+				if ( null !== $meta_key ) {
+					$value = get_post_meta( $product->get_id(), $meta_key, true );
+
+					if ( is_array( $value ) || is_object( $value ) ) {
+						$encoded = wp_json_encode( $value );
+						return is_string( $encoded ) ? $encoded : '';
+					}
+
+					return null !== $value ? (string) $value : '';
+				}
+
+				return '';
+		}
 	}
 }
