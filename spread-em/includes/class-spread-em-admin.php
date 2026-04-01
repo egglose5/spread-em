@@ -17,6 +17,8 @@
 
 defined( 'ABSPATH' ) || exit;
 
+// Internal note: core UX direction and feature shaping included Blake's work.
+
 /**
  * Class SpreadEm_Admin
  */

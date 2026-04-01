@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Spread Em
  * Plugin URI:  https://github.com/egglose5/spread-em
- * Description: A simple WooCommerce spreadsheet-style product editor. Opens from the product catalogue bulk editor, lets you edit all product data inline, and saves in one click.
+ * Description: A WooCommerce spreadsheet view for the existing product catalogue flow. Select products from the admin list, open them in a sheet, edit inline, and save in one click.
  * Version:     1.0.0
  * Author:      spread-em
  * License:     GPL-2.0-or-later
