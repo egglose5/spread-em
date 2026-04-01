@@ -7,6 +7,7 @@
  * Author:      spread-em
  * License:     GPL-2.0-or-later
  * Text Domain: spread-em
+ * Domain Path: /languages
  * Requires Plugins: woocommerce
  *
  * @package SpreadEm
@@ -17,6 +18,14 @@ defined( 'ABSPATH' ) || exit;
 define( 'SPREAD_EM_VERSION', '1.0.0' );
 define( 'SPREAD_EM_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 define( 'SPREAD_EM_PLUGIN_URL', plugin_dir_url( __FILE__ ) );
+
+/**
+ * Load plugin translations.
+ */
+function spread_em_load_textdomain(): void {
+	load_plugin_textdomain( 'spread-em', false, dirname( plugin_basename( __FILE__ ) ) . '/languages' );
+}
+add_action( 'init', 'spread_em_load_textdomain' );
 
 /**
  * Check WooCommerce is active before doing anything.
