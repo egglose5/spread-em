@@ -47,6 +47,7 @@
 
 		buildTable();
 		initColumnLayout();
+		syncColumnWidthsForContent();
 
 		$( '#spread-em-loading' ).hide();
 		$( '#spread-em-table-wrap' ).show();
@@ -58,6 +59,7 @@
 		// Hide/show parent product rows.
 		$( '#spread-em-hide-parents' ).on( 'change', function () {
 			$( '#spread-em-tbody tr.spread-em-parent-row' ).toggle( ! this.checked );
+			syncColumnWidthsForContent();
 		} );
 
 		// Warn on leaving with unsaved changes.
@@ -88,6 +90,7 @@
 	function buildTable() {
 		buildHeader();
 		buildBody();
+		syncColumnWidthsForContent();
 	}
 
 	function buildHeader() {
@@ -659,6 +662,7 @@
 					if ( $( '#spread-em-hide-parents' ).is( ':checked' ) ) {
 						$( '#spread-em-tbody tr.spread-em-parent-row' ).hide();
 					}
+					syncColumnWidthsForContent();
 
 					$( '#spread-em-undo' ).prop( 'disabled', true );
 
@@ -795,6 +799,70 @@
 			try {
 				localStorage.setItem( COL_WIDTHS_KEY, JSON.stringify( measured ) );
 			} catch ( e ) {}
+		}
+	}
+
+	/**
+	 * Compute a safe minimum width for each column so controls do not overlap.
+	 * Adds extra room to the first visible column when variation rows are shown,
+	 * because those rows are visually indented.
+	 *
+	 * @param {string}  key                  Column key.
+	 * @param {number}  index                Column index.
+	 * @param {boolean} hasVisibleVariations Whether variation rows are visible.
+	 * @returns {number}
+	 */
+	function getColumnFloorWidth( key, index, hasVisibleVariations ) {
+		let min = 96;
+
+		if ( 'name' === key ) {
+			min = 180;
+		} else if ( 'attributes' === key || 0 === String( key ).indexOf( 'meta::' ) ) {
+			min = 200;
+		} else if ( 'short_description' === key || 'description' === key ) {
+			min = 160;
+		} else if ( 'categories' === key || 'tags' === key ) {
+			min = 170;
+		}
+
+		if ( 0 === index && hasVisibleVariations ) {
+			min += 28;
+		}
+
+		return min;
+	}
+
+	/**
+	 * Ensure current column widths are never narrower than overlap-safe floors.
+	 * This keeps dynamic sizing while preventing control collisions.
+	 */
+	function syncColumnWidthsForContent() {
+		const $cols = $( '#spread-em-colgroup col' );
+		if ( ! $cols.length ) {
+			return;
+		}
+
+		const hasVisibleVariations = $( '#spread-em-tbody tr.spread-em-variation-row:visible' ).length > 0;
+		let changed = false;
+
+		$cols.each( function ( index ) {
+			const key = String( $( this ).attr( 'data-key' ) || '' );
+			if ( ! key ) {
+				return;
+			}
+
+			const current = parseInt( $( this ).css( 'width' ), 10 ) || 0;
+			const floor = getColumnFloorWidth( key, index, hasVisibleVariations );
+			const next = Math.max( current, floor );
+
+			if ( next !== current ) {
+				$( this ).css( 'width', next + 'px' );
+				changed = true;
+			}
+		} );
+
+		if ( changed ) {
+			saveColumnWidths();
 		}
 	}
 

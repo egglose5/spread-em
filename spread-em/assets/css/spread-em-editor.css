@@ -207,6 +207,7 @@
 	padding: 4px 6px;
 	border-bottom: 2px solid #2271b1;
 	text-align: center;
+	white-space: nowrap;
 }
 
 .spread-em-override-input {
@@ -251,6 +252,7 @@
 .spread-em-taxonomy-picker .spread-em-override-input {
 	flex: 1 1 auto;
 	width: auto;
+	min-width: 0;
 }
 
 .spread-em-taxonomy-toggle {
