@@ -1,8 +1,10 @@
-# 🤲 Spread'em — Spreadsheet-style WooCommerce Product Editor
+# 🤲 Spread'em
 
-**Free. No upsells. No account required. Just install and go.**
+**Really spreading your WooCommerce database.**
 
-Spread'em turns the WooCommerce product catalogue into a live, editable spreadsheet. Select any products from the WooCommerce admin list, hit **🤲 Spread Em** in the bulk-actions menu, and edit everything inline — no page reloads, no clicking into individual product pages.
+Free. No upsells. No account required. Just install and go.
+
+Spread'em turns the WooCommerce product catalogue into a live, editable spreadsheet. Select any products from the WooCommerce admin list, hit **🤲 Spread Em** in the bulk-actions menu, and spread your product data into a true sheet view for fast inline editing — no page reloads, no clicking into individual product pages.
 
 ---
 
