@@ -82,6 +82,7 @@ Automated tests now exist under `tests/` and run with PHPUnit.
 
 - Capability mapping and permission checks in `SpreadEm_Permissions`
 - Live activity feed pruning, bounding, and scope filtering in `SpreadEm_Ajax`
+- Live scope access checks, direct-message filtering, and presence pruning in `SpreadEm_Ajax`
 
 If `composer` or `phpunit` is not installed on your machine yet, tests cannot execute until one of those tools is available.
 
