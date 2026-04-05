@@ -104,7 +104,7 @@ Spread Em includes a lightweight mechanism that lets multiple admins see each ot
 ### Ghost entry prevention
 
 - Each push request carries a **`client_request_id`** (a UUID generated in the browser). If the same request is retried after a network hiccup the server recognises the UUID and returns the original token without re-applying the change, so retries are fully idempotent.
-- A new row is never permanently added to the UI until the server acknowledges it.
+- Draft sync covers edits to **existing products** already loaded in the editor. In-progress cell values are stored server-side so other admins see them within the next poll cycle instead of only after "Save All Changes" is clicked.
 
 ### Tuning knobs
 
