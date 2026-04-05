@@ -29,11 +29,25 @@ class SpreadEm_Ajax {
 	/** @var string AJAX action for direct live messaging. */
 	const ACTION_LIVE_IM_SEND = 'spread_em_live_im_send';
 
+	/** @var string AJAX action: save a draft field delta (idempotent, short TTL). */
+	const ACTION_SAVE_DRAFT = 'spread_em_save_draft';
+
+	/** @var string AJAX action: poll for draft deltas since a given token. */
+	const ACTION_POLL_DRAFT = 'spread_em_poll_draft';
+
 	/** @var string User meta key containing live workspace scope. */
 	const LIVE_SCOPE_META_KEY = 'spread_em_live_scope';
 
 	/** @var int Max activity events retained in live state. */
 	const LIVE_ACTIVITY_MAX = 120;
+
+	/**
+	 * Draft transient TTL in seconds.
+	 *
+	 * Drafts are short-lived; this keeps the DB lean and ensures ghost entries
+	 * expire automatically without a cleanup job.
+	 */
+	const DRAFT_TTL = 120;
 
 	/**
 	 * Register AJAX hooks (logged-in users only).
@@ -43,6 +57,8 @@ class SpreadEm_Ajax {
 		add_action( 'wp_ajax_' . self::ACTION_LIVE_PUSH, [ __CLASS__, 'handle_live_push' ] );
 		add_action( 'wp_ajax_' . self::ACTION_LIVE_PULL, [ __CLASS__, 'handle_live_pull' ] );
 		add_action( 'wp_ajax_' . self::ACTION_LIVE_IM_SEND, [ __CLASS__, 'handle_live_im_send' ] );
+		add_action( 'wp_ajax_' . self::ACTION_SAVE_DRAFT, [ __CLASS__, 'handle_save_draft' ] );
+		add_action( 'wp_ajax_' . self::ACTION_POLL_DRAFT, [ __CLASS__, 'handle_poll_draft' ] );
 	}
 
 	/**
@@ -394,6 +410,112 @@ class SpreadEm_Ajax {
 	}
 
 	/**
+	 * Store a single draft field delta server-side.
+	 *
+	 * Accepts a debounced cell change from the editor and persists it to a
+	 * short-lived draft transient (DRAFT_TTL seconds).  The client_request_id
+	 * makes the operation idempotent so retries on network failure never
+	 * duplicate an edit.  Returns a monotonically increasing token that
+	 * clients pass to poll_draft as since_token.
+	 */
+	public static function handle_save_draft(): void {
+		if ( ! check_ajax_referer( 'spread_em_live_nonce', 'nonce', false ) ) {
+			wp_send_json_error( [ 'message' => __( 'Security check failed.', 'spread-em' ) ], 403 );
+		}
+
+		if ( ! SpreadEm_Permissions::current_user_can_live_collaborate() ) {
+			wp_send_json_error( [ 'message' => __( 'You do not have permission to edit products.', 'spread-em' ) ], 403 );
+		}
+
+		$session_id      = isset( $_POST['session_id'] ) ? sanitize_key( wp_unslash( $_POST['session_id'] ) ) : '';
+		$client_req_id   = isset( $_POST['client_request_id'] ) ? sanitize_key( wp_unslash( $_POST['client_request_id'] ) ) : '';
+		$product_id      = isset( $_POST['product_id'] ) ? absint( $_POST['product_id'] ) : 0;
+		$key             = isset( $_POST['key'] ) ? sanitize_text_field( wp_unslash( $_POST['key'] ) ) : '';
+		$value           = isset( $_POST['value'] ) ? sanitize_textarea_field( wp_unslash( $_POST['value'] ) ) : '';
+
+		if ( '' === $session_id || '' === $client_req_id || ! $product_id || '' === $key || 'id' === $key ) {
+			wp_send_json_error( [ 'message' => __( 'Invalid draft payload.', 'spread-em' ) ], 400 );
+		}
+
+		if ( ! self::current_user_can_access_product( $product_id ) ) {
+			wp_send_json_error( [ 'message' => __( 'You do not have access to update this product in the live workspace.', 'spread-em' ) ], 403 );
+		}
+
+		$draft = self::get_draft_state( $session_id );
+
+		// Idempotency: if this exact request was already applied, return the
+		// same token without touching the draft data.
+		$seen = isset( $draft['seen_request_ids'] ) && is_array( $draft['seen_request_ids'] )
+			? $draft['seen_request_ids']
+			: [];
+
+		if ( in_array( $client_req_id, $seen, true ) ) {
+			wp_send_json_success( [ 'token' => (int) ( $draft['version'] ?? 0 ) ] );
+			return;
+		}
+
+		// Apply the delta.
+		if ( ! isset( $draft['cells'][ $product_id ] ) || ! is_array( $draft['cells'][ $product_id ] ) ) {
+			$draft['cells'][ $product_id ] = [];
+		}
+
+		$draft['cells'][ $product_id ][ $key ] = $value;
+		$draft['version'] = (int) ( $draft['version'] ?? 0 ) + 1;
+
+		// Track seen request IDs (bounded to last 100 to avoid unbounded growth).
+		$seen[]                    = $client_req_id;
+		$draft['seen_request_ids'] = array_slice( $seen, -100 );
+
+		self::save_draft_state( $session_id, $draft );
+
+		wp_send_json_success( [ 'token' => (int) $draft['version'] ] );
+	}
+
+	/**
+	 * Return draft deltas that occurred after the given since_token.
+	 *
+	 * This endpoint is deliberately cheap: when the draft version has not
+	 * advanced beyond since_token it returns immediately without a DB write,
+	 * making it safe to call on every poll tick on shared hosting.
+	 */
+	public static function handle_poll_draft(): void {
+		if ( ! check_ajax_referer( 'spread_em_live_nonce', 'nonce', false ) ) {
+			wp_send_json_error( [ 'message' => __( 'Security check failed.', 'spread-em' ) ], 403 );
+		}
+
+		if ( ! SpreadEm_Permissions::current_user_can_live_collaborate() ) {
+			wp_send_json_error( [ 'message' => __( 'You do not have permission to edit products.', 'spread-em' ) ], 403 );
+		}
+
+		$session_id  = isset( $_POST['session_id'] ) ? sanitize_key( wp_unslash( $_POST['session_id'] ) ) : '';
+		$since_token = isset( $_POST['since_token'] ) ? absint( $_POST['since_token'] ) : 0;
+
+		if ( '' === $session_id ) {
+			wp_send_json_error( [ 'message' => __( 'Invalid session ID.', 'spread-em' ) ], 400 );
+		}
+
+		$draft   = self::get_draft_state( $session_id );
+		$version = (int) ( $draft['version'] ?? 0 );
+
+		// Short-circuit: nothing has changed since the client's last token.
+		if ( $version <= $since_token ) {
+			wp_send_json_success( [ 'has_updates' => false, 'token' => $version ] );
+			return;
+		}
+
+		$cells = isset( $draft['cells'] ) && is_array( $draft['cells'] ) ? $draft['cells'] : [];
+		$cells = self::filter_live_cells_for_current_user( $cells );
+
+		wp_send_json_success(
+			[
+				'has_updates' => true,
+				'token'       => $version,
+				'cells'       => $cells,
+			]
+		);
+	}
+
+	/**
 	 * Build transient key for one live session.
 	 *
 	 * @param string $session_id Live session ID.
@@ -401,6 +523,40 @@ class SpreadEm_Ajax {
 	 */
 	private static function live_transient_key( string $session_id ): string {
 		return 'spread_em_live_' . $session_id;
+	}
+
+	/**
+	 * Build transient key for a draft session.
+	 *
+	 * Draft keys are intentionally separate from the live-session keys so
+	 * that the different TTLs don't interfere with presence or IM state.
+	 *
+	 * @param string $session_id Draft session ID.
+	 * @return string
+	 */
+	private static function draft_transient_key( string $session_id ): string {
+		return 'spread_em_draft_' . $session_id;
+	}
+
+	/**
+	 * Fetch draft state from transient storage.
+	 *
+	 * @param string $session_id Draft session ID.
+	 * @return array<string,mixed>
+	 */
+	private static function get_draft_state( string $session_id ): array {
+		$draft = get_transient( self::draft_transient_key( $session_id ) );
+		return is_array( $draft ) ? $draft : [];
+	}
+
+	/**
+	 * Persist draft state with a short TTL to auto-expire ghost entries.
+	 *
+	 * @param string             $session_id Draft session ID.
+	 * @param array<string,mixed> $draft     Draft payload.
+	 */
+	private static function save_draft_state( string $session_id, array $draft ): void {
+		set_transient( self::draft_transient_key( $session_id ), $draft, self::DRAFT_TTL );
 	}
 
 	/**

@@ -64,7 +64,10 @@
 	const liveConfig = spreadEmData.live || { enabled: false };
 	const currentUser = spreadEmData.current_user || { id: 0, name: '' };
 	let liveVersion = 0;
+	let draftToken = 0;
 	let livePollTimer = null;
+	/** Per-cell debounce timers keyed by "productId:key". */
+	const saveDraftTimers = {};
 	let isApplyingRemote = false;
 	let activePresence = {};
 	let directMessages = [];
@@ -446,6 +449,7 @@
 		if ( liveConfig.enabled && ! isApplyingRemote ) {
 			pushLiveRowClaim( rowIndex );
 			pushLiveCellChange( rowIndex, key, newValue );
+			saveDraft( rowIndex, key, newValue );
 		}
 
 		isDirty = true;
@@ -460,11 +464,143 @@
 	 * ---------------------------------------------------------------------- */
 
 	function startLiveSessionSync() {
+		// Initial full fetch for presence / IM / activity (heavier, less frequent).
+		// pollDraft() handles lightweight cell-delta polling separately via
+		// scheduleDraftPoll() below.
 		pullLiveState( true );
-		const interval = parseInt( liveConfig.poll_interval, 10 ) || 2500;
-		livePollTimer = window.setInterval( function () {
-			pullLiveState( false );
-		}, interval );
+		scheduleDraftPoll();
+
+		// Adjust poll cadence whenever the tab visibility changes.
+		document.addEventListener( 'visibilitychange', function () {
+			if ( livePollTimer ) {
+				clearTimeout( livePollTimer );
+				livePollTimer = null;
+			}
+			scheduleDraftPoll();
+		} );
+	}
+
+	/**
+	 * Schedule the next draft poll with adaptive interval and jitter.
+	 *
+	 * When the document is hidden the interval grows to poll_hidden_interval
+	 * (default 30 s) to avoid unnecessary server load on shared hosting.
+	 * A ±10 % jitter prevents thundering-herd effects when multiple tabs
+	 * or users happen to open the editor simultaneously.
+	 */
+	function scheduleDraftPoll() {
+		const baseInterval   = parseInt( liveConfig.poll_interval, 10 ) || 10000;
+		const hiddenInterval = parseInt( liveConfig.poll_hidden_interval, 10 ) || 30000;
+		const interval       = document.hidden ? hiddenInterval : baseInterval;
+		const jitter         = Math.floor( ( Math.random() - 0.5 ) * 0.2 * interval );
+		const delay          = Math.max( 1000, interval + jitter );
+
+		livePollTimer = window.setTimeout( function () {
+			pollDraft( false );
+			scheduleDraftPoll();
+		}, delay );
+	}
+
+	/**
+	 * Generate a RFC-4122 v4 UUID used as client_request_id for idempotency.
+	 *
+	 * @returns {string}
+	 */
+	function generateUUID() {
+		return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace( /[xy]/g, function ( c ) {
+			const r = Math.random() * 16 | 0;
+			const v = 'x' === c ? r : ( r & 0x3 | 0x8 );
+			return v.toString( 16 );
+		} );
+	}
+
+	/**
+	 * Debounced draft save.
+	 *
+	 * Each (productId, key) pair has its own debounce timer so that concurrent
+	 * edits to different cells within the window are never lost.  The UUID is
+	 * captured before the timer fires so that any automatic retry of the same
+	 * debounced batch uses the identical client_request_id, ensuring idempotency.
+	 *
+	 * @param {number} rowIndex  Row index in currentData.
+	 * @param {string} key       Column key.
+	 * @param {string} value     New cell value.
+	 */
+	function saveDraft( rowIndex, key, value ) {
+		const row = currentData[ rowIndex ];
+
+		if ( ! row || ! row.id ) {
+			return;
+		}
+
+		const productId = parseInt( row.id, 10 );
+		if ( Number.isNaN( productId ) || productId <= 0 ) {
+			return;
+		}
+
+		// Use a per-cell key so concurrent edits on different cells don't cancel
+		// each other's pending save.
+		const cellKey = productId + ':' + key;
+
+		if ( saveDraftTimers[ cellKey ] ) {
+			clearTimeout( saveDraftTimers[ cellKey ] );
+		}
+
+		// Capture a stable UUID now (outside the timer) so retries of this
+		// exact debounced batch always carry the same client_request_id.
+		const clientRequestId = generateUUID();
+
+		saveDraftTimers[ cellKey ] = window.setTimeout( function () {
+			delete saveDraftTimers[ cellKey ];
+			$.post(
+				spreadEmData.ajax_url,
+				{
+					action:            'spread_em_save_draft',
+					nonce:             liveConfig.nonce,
+					session_id:        liveConfig.session_id,
+					product_id:        productId,
+					key:               key,
+					value:             value,
+					client_request_id: clientRequestId,
+				}
+			).done( function ( response ) {
+				if ( response && response.success && response.data && response.data.token !== undefined ) {
+					draftToken = Math.max( draftToken, parseInt( response.data.token, 10 ) || 0 );
+				}
+			} );
+		}, parseInt( liveConfig.debounce_ms, 10 ) || 500 );
+	}
+
+	/**
+	 * Poll the server for draft cell deltas since the last known token.
+	 *
+	 * When the server version equals the client token the response is a tiny
+	 * JSON object with has_updates=false and no further processing occurs,
+	 * making this cheap on shared hosting.
+	 *
+	 * @param {boolean} force  Pass true to request all deltas from version 0.
+	 */
+	function pollDraft( force ) {
+		$.post(
+			spreadEmData.ajax_url,
+			{
+				action:      'spread_em_poll_draft',
+				nonce:       liveConfig.nonce,
+				session_id:  liveConfig.session_id,
+				since_token: force ? 0 : draftToken,
+			}
+		).done( function ( response ) {
+			if ( ! response || ! response.success || ! response.data ) {
+				return;
+			}
+
+			const data = response.data;
+			draftToken = Math.max( draftToken, parseInt( data.token, 10 ) || 0 );
+
+			if ( data.has_updates && data.cells ) {
+				applyRemoteCells( data.cells );
+			}
+		} );
 	}
 
 	function pushLiveCellChange( rowIndex, key, value ) {

@@ -20,6 +20,7 @@ $GLOBALS['spread_em_test_state'] = [
     'options' => [],
     'user_meta' => [],
     'current_user_id' => 1,
+    'transients' => [],
 ];
 
 if (!function_exists('apply_filters')) {
@@ -69,6 +70,26 @@ if (!function_exists('get_user_meta')) {
     }
 }
 
+if (!function_exists('get_transient')) {
+    function get_transient(string $key) {
+        return $GLOBALS['spread_em_test_state']['transients'][$key] ?? false;
+    }
+}
+
+if (!function_exists('set_transient')) {
+    function set_transient(string $key, $value, int $expiration = 0): bool {
+        $GLOBALS['spread_em_test_state']['transients'][$key] = $value;
+        return true;
+    }
+}
+
+if (!function_exists('delete_transient')) {
+    function delete_transient(string $key): bool {
+        unset($GLOBALS['spread_em_test_state']['transients'][$key]);
+        return true;
+    }
+}
+
 if (!function_exists('sanitize_key')) {
     function sanitize_key(string $key): string {
         return strtolower(preg_replace('/[^a-z0-9_\-]/', '', $key) ?? '');
@@ -77,6 +98,12 @@ if (!function_exists('sanitize_key')) {
 
 if (!function_exists('sanitize_text_field')) {
     function sanitize_text_field(string $value): string {
+        return trim($value);
+    }
+}
+
+if (!function_exists('sanitize_textarea_field')) {
+    function sanitize_textarea_field(string $value): string {
         return trim($value);
     }
 }

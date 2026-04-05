@@ -12,6 +12,7 @@ The core idea is simple: keep WooCommerce's existing catalogue and product data 
 
 ## Features
 
+- **Live draft sync** — in-progress catalogue edits are shared between all active admin sessions in near-real-time without a full page refresh (see [Live Draft Sync](#live-draft-sync) below)
 - **Spreadsheet view for existing WooCommerce data** — use the catalogue flow you already know, but open the selected products in one editable table with name, SKU, price, sale price, stock, weight, dimensions, status, visibility, categories, tags, attributes, description, and more
 - **Parent category filter includes child categories** — when filtering products in the WooCommerce admin catalogue, selecting a parent product category also includes products assigned to descendant categories
 - **Variable products + variations** — parent and all child variations load together; variation-only fields (price, stock, SKU) are editable; inherited fields (name, categories) are shown read-only on children
@@ -87,6 +88,46 @@ Automated tests now exist under `tests/` and run with PHPUnit.
 If `composer` or `phpunit` is not installed on your machine yet, tests cannot execute until one of those tools is available.
 
 ---
+
+## Live Draft Sync
+
+Spread Em includes a lightweight mechanism that lets multiple admins see each other's **in-progress catalogue edits** (before Save is clicked) without a full page refresh.
+
+### How it works
+
+1. Every time an admin edits a cell, the change is queued for a **debounced push** to the server (default 500 ms after the last keystroke).  
+2. The push is sent to the `spread_em_save_draft` AJAX endpoint, which stores it in a WordPress transient under a session-specific key.  
+3. Other admins on the same editor session poll the `spread_em_poll_draft` endpoint at a configurable interval (default **10 seconds**).  
+4. When the server version has not advanced since the client's last token the response is a tiny `{"has_updates":false}` JSON object — no DOM update occurs and the DB write is skipped, keeping shared-hosting load minimal.  
+5. When there are new deltas the server returns only the changed `(product_id, field, value)` tuples and the editor applies them to any cell that is not currently focused.
+
+### Ghost entry prevention
+
+- Each push request carries a **`client_request_id`** (a UUID generated in the browser). If the same request is retried after a network hiccup the server recognises the UUID and returns the original token without re-applying the change, so retries are fully idempotent.
+- Draft sync covers edits to **existing products** already loaded in the editor. In-progress cell values are stored server-side so other admins see them within the next poll cycle instead of only after "Save All Changes" is clicked.
+
+### Tuning knobs
+
+| Config key | Default | Description |
+|---|---|---|
+| `poll_interval` | 10 000 ms | Draft poll interval when the browser tab is visible |
+| `poll_hidden_interval` | 30 000 ms | Draft poll interval when the browser tab is hidden |
+| `debounce_ms` | 500 ms | How long to wait after the last keystroke before sending a draft push |
+| `DRAFT_TTL` | 120 s | Server-side transient TTL; drafts expire automatically without a cleanup job |
+
+These are set in `SpreadEm_Admin::enqueue_assets()` (PHP) and read by `spreadEmData.live` (JavaScript). To change them without editing plugin files, hook into `admin_enqueue_scripts` at a later priority and call `wp_localize_script` with updated values.
+
+### Limitations
+
+- **Not real-time** — changes appear within one poll interval (up to 10 s by default), not instantly.  
+- **Admin-only** — all endpoints require the `spread_em_live_individual_contributor` or `spread_em_live_global_operator` capability; unauthenticated requests are rejected.  
+- **Requires JavaScript** — the feature degrades silently if JS is disabled.  
+- **Transient-backed** — on installations that disable WordPress transients or use a persistent object cache with an aggressive eviction policy, drafts may not be shared between processes. Standard MySQL-backed transients work without extra configuration.  
+- **Single shared session** — all admins editing the same workspace share one draft session; granular per-user conflict resolution (e.g., merge dialogs) is not implemented.
+
+---
+
+
 
 ## Compatibility Notes
 
