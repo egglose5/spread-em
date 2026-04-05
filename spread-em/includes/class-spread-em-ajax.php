@@ -42,6 +42,14 @@ class SpreadEm_Ajax {
 	const LIVE_ACTIVITY_MAX = 120;
 
 	/**
+	 * Minimum seconds between presence heartbeat writes on metadata polls.
+	 *
+	 * Shared-host installs often persist transients in MySQL, so throttling
+	 * heartbeats avoids turning every poll into a write.
+	 */
+	const PRESENCE_HEARTBEAT_INTERVAL = 20;
+
+	/**
 	 * Draft transient TTL in seconds.
 	 *
 	 * Drafts are short-lived; this keeps the DB lean and ensures ghost entries
@@ -312,27 +320,69 @@ class SpreadEm_Ajax {
 
 		$state = self::get_live_state( $session_id );
 		$state['version'] = isset( $state['version'] ) ? (int) $state['version'] : 0;
-		$state['cells']   = isset( $state['cells'] ) && is_array( $state['cells'] ) ? $state['cells'] : [];
-		$state['cells']   = self::filter_live_cells_for_current_user( $state['cells'] );
-		$state['row_owners'] = isset( $state['row_owners'] ) && is_array( $state['row_owners'] ) ? $state['row_owners'] : [];
-		$state['row_owners'] = self::prune_live_row_owners( $state['row_owners'] );
-		$state['row_owners'] = self::filter_live_row_owners_for_current_user( $state['row_owners'] );
-		$state['direct_messages'] = isset( $state['direct_messages'] ) && is_array( $state['direct_messages'] ) ? $state['direct_messages'] : [];
-		$state['direct_messages'] = self::prune_live_direct_messages( $state['direct_messages'] );
-		$state['activity'] = isset( $state['activity'] ) && is_array( $state['activity'] ) ? $state['activity'] : [];
-		$state['activity'] = self::prune_live_activity( $state['activity'] );
+		$state_changed = false;
 
-		$presence      = isset( $state['presence'] ) && is_array( $state['presence'] ) ? $state['presence'] : [];
-		$current_scope = self::get_current_user_live_scope();
-		$presence = self::prune_live_presence( $presence );
-		$presence[ get_current_user_id() ] = [
+		$raw_cells = isset( $state['cells'] ) && is_array( $state['cells'] ) ? $state['cells'] : [];
+		$state['cells'] = $raw_cells;
+		$response_cells = self::filter_live_cells_for_current_user( $raw_cells );
+
+		$raw_row_owners = isset( $state['row_owners'] ) && is_array( $state['row_owners'] ) ? $state['row_owners'] : [];
+		$pruned_row_owners = self::prune_live_row_owners( $raw_row_owners );
+		if ( $pruned_row_owners !== $raw_row_owners ) {
+			$state_changed = true;
+		}
+		$state['row_owners'] = $pruned_row_owners;
+		$response_row_owners = self::filter_live_row_owners_for_current_user( $pruned_row_owners );
+
+		$raw_direct_messages = isset( $state['direct_messages'] ) && is_array( $state['direct_messages'] ) ? $state['direct_messages'] : [];
+		$pruned_direct_messages = self::prune_live_direct_messages( $raw_direct_messages );
+		if ( $pruned_direct_messages !== $raw_direct_messages ) {
+			$state_changed = true;
+		}
+		$state['direct_messages'] = $pruned_direct_messages;
+		$response_direct_messages = self::filter_live_direct_messages_for_current_user( $pruned_direct_messages );
+
+		$raw_activity = isset( $state['activity'] ) && is_array( $state['activity'] ) ? $state['activity'] : [];
+		$pruned_activity = self::prune_live_activity( $raw_activity );
+		if ( $pruned_activity !== $raw_activity ) {
+			$state_changed = true;
+		}
+		$state['activity'] = $pruned_activity;
+		$response_activity = self::filter_live_activity_for_current_user( $pruned_activity );
+
+		$presence_before = isset( $state['presence'] ) && is_array( $state['presence'] ) ? $state['presence'] : [];
+		$current_scope   = self::get_current_user_live_scope();
+		$presence        = self::prune_live_presence( $presence_before );
+		if ( $presence !== $presence_before ) {
+			$state_changed = true;
+		}
+
+		$current_user_id = get_current_user_id();
+		$next_presence = [
 			'name'       => self::get_current_editor_name(),
 			'ts'         => time(),
 			'scope_mode' => isset( $current_scope['scope_mode'] ) ? (string) $current_scope['scope_mode'] : 'individual_contributor',
 		];
+
+		$existing_presence = isset( $presence[ $current_user_id ] ) && is_array( $presence[ $current_user_id ] )
+			? $presence[ $current_user_id ]
+			: [];
+		$heartbeat_cutoff = time() - self::live_presence_heartbeat_interval();
+		$needs_presence_refresh = empty( $existing_presence )
+			|| empty( $existing_presence['ts'] )
+			|| (int) $existing_presence['ts'] < $heartbeat_cutoff
+			|| ( isset( $existing_presence['scope_mode'] ) ? (string) $existing_presence['scope_mode'] : '' ) !== $next_presence['scope_mode']
+			|| ( isset( $existing_presence['name'] ) ? (string) $existing_presence['name'] : '' ) !== $next_presence['name'];
+
+		if ( $needs_presence_refresh ) {
+			$presence[ $current_user_id ] = $next_presence;
+			$state_changed = true;
+		}
 		$state['presence'] = $presence;
 
-		self::save_live_state( $session_id, $state );
+		if ( $state_changed ) {
+			self::save_live_state( $session_id, $state );
+		}
 
 		$has_updates = $state['version'] > $since;
 
@@ -340,10 +390,10 @@ class SpreadEm_Ajax {
 			[
 				'version'     => $state['version'],
 				'has_updates' => $has_updates,
-				'cells'       => $has_updates ? $state['cells'] : [],
-				'row_owners'  => $state['row_owners'],
-				'direct_messages' => self::filter_live_direct_messages_for_current_user( $state['direct_messages'] ),
-				'activity'    => self::filter_live_activity_for_current_user( $state['activity'] ),
+				'cells'       => $has_updates ? $response_cells : [],
+				'row_owners'  => $response_row_owners,
+				'direct_messages' => $response_direct_messages,
+				'activity'    => $response_activity,
 				'presence'    => $state['presence'],
 			]
 		);
@@ -468,6 +518,35 @@ class SpreadEm_Ajax {
 
 		self::save_draft_state( $session_id, $draft );
 
+		// Draft sync is the primary unsaved-cell channel on shared hosting.
+		// Record the edit activity here so the UI does not need to push a second
+		// per-cell live update just to drive operator awareness.
+		$state = self::get_live_state( $session_id );
+		$state['activity'] = isset( $state['activity'] ) && is_array( $state['activity'] ) ? $state['activity'] : [];
+		$state['activity'] = self::append_live_activity_event(
+			$state['activity'],
+			[
+				'type'       => 'edit',
+				'user_id'    => get_current_user_id(),
+				'user_name'  => self::get_current_editor_name(),
+				'product_id' => $product_id,
+				'field'      => $key,
+				'ts'         => time(),
+			]
+		);
+
+		$presence      = isset( $state['presence'] ) && is_array( $state['presence'] ) ? $state['presence'] : [];
+		$current_scope = self::get_current_user_live_scope();
+		$presence      = self::prune_live_presence( $presence );
+		$presence[ get_current_user_id() ] = [
+			'name'       => self::get_current_editor_name(),
+			'ts'         => time(),
+			'scope_mode' => isset( $current_scope['scope_mode'] ) ? (string) $current_scope['scope_mode'] : 'individual_contributor',
+		];
+		$state['presence'] = $presence;
+		$state['updated_at'] = current_time( 'mysql', true );
+		self::save_live_state( $session_id, $state );
+
 		wp_send_json_success( [ 'token' => (int) $draft['version'] ] );
 	}
 
@@ -556,7 +635,7 @@ class SpreadEm_Ajax {
 	 * @param array<string,mixed> $draft     Draft payload.
 	 */
 	private static function save_draft_state( string $session_id, array $draft ): void {
-		set_transient( self::draft_transient_key( $session_id ), $draft, self::DRAFT_TTL );
+		set_transient( self::draft_transient_key( $session_id ), $draft, self::draft_ttl() );
 	}
 
 	/**
@@ -901,7 +980,46 @@ class SpreadEm_Ajax {
 	 * @param array<string,mixed> $state     Session state payload.
 	 */
 	private static function save_live_state( string $session_id, array $state ): void {
-		set_transient( self::live_transient_key( $session_id ), $state, HOUR_IN_SECONDS );
+		set_transient( self::live_transient_key( $session_id ), $state, self::live_state_ttl() );
+	}
+
+	/**
+	 * Resolve the effective draft TTL.
+	 *
+	 * @return int
+	 */
+	private static function draft_ttl(): int {
+		$ttl = class_exists( 'SpreadEm_Admin' ) && method_exists( 'SpreadEm_Admin', 'get_live_runtime_setting' )
+			? (int) SpreadEm_Admin::get_live_runtime_setting( 'draft_ttl', self::DRAFT_TTL )
+			: (int) apply_filters( 'spread_em_live_draft_ttl', self::DRAFT_TTL );
+
+		return max( 30, $ttl );
+	}
+
+	/**
+	 * Resolve the effective live-state TTL.
+	 *
+	 * @return int
+	 */
+	private static function live_state_ttl(): int {
+		$ttl = class_exists( 'SpreadEm_Admin' ) && method_exists( 'SpreadEm_Admin', 'get_live_runtime_setting' )
+			? (int) SpreadEm_Admin::get_live_runtime_setting( 'live_state_ttl', HOUR_IN_SECONDS )
+			: (int) apply_filters( 'spread_em_live_state_ttl', HOUR_IN_SECONDS );
+
+		return max( MINUTE_IN_SECONDS, $ttl );
+	}
+
+	/**
+	 * Resolve the minimum write interval for presence heartbeats.
+	 *
+	 * @return int
+	 */
+	private static function live_presence_heartbeat_interval(): int {
+		$interval = class_exists( 'SpreadEm_Admin' ) && method_exists( 'SpreadEm_Admin', 'get_live_runtime_setting' )
+			? (int) SpreadEm_Admin::get_live_runtime_setting( 'presence_heartbeat_interval', self::PRESENCE_HEARTBEAT_INTERVAL )
+			: (int) apply_filters( 'spread_em_live_presence_heartbeat_interval', self::PRESENCE_HEARTBEAT_INTERVAL );
+
+		return max( 5, $interval );
 	}
 
 	/**

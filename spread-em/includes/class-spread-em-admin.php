@@ -32,6 +32,12 @@ class SpreadEm_Admin {
 	/** @var string Slug for the editor admin page. */
 	const PAGE_SLUG = 'spread-em-editor';
 
+	/** @var string Slug for the settings admin page. */
+	const SETTINGS_PAGE_SLUG = 'spread-em-settings';
+
+	/** @var string Option key storing shared-host tuning values. */
+	const OPTION_LIVE_TUNING = 'spread_em_live_tuning';
+
 	/** @var string Bulk action identifier. */
 	const BULK_ACTION = 'spread_em_bulk_edit';
 
@@ -41,6 +47,9 @@ class SpreadEm_Admin {
 	public static function init(): void {
 		// Register the hidden admin page that renders the editor.
 		add_action( 'admin_menu', [ __CLASS__, 'register_admin_page' ] );
+		add_action( 'admin_menu', [ __CLASS__, 'register_settings_page' ] );
+		add_action( 'admin_init', [ __CLASS__, 'register_settings' ] );
+		add_filter( 'option_page_capability_spread_em_settings', [ __CLASS__, 'settings_page_capability' ] );
 
 		// Enqueue assets only on our editor page.
 		add_action( 'admin_enqueue_scripts', [ __CLASS__, 'enqueue_assets' ] );
@@ -68,6 +77,291 @@ class SpreadEm_Admin {
 			self::PAGE_SLUG,
 			[ __CLASS__, 'render_editor_page' ]
 		);
+	}
+
+	/**
+	 * Register the visible settings page under WooCommerce.
+	 */
+	public static function register_settings_page(): void {
+		add_submenu_page(
+			'woocommerce',
+			__( 'Spread Em Settings', 'spread-em' ),
+			__( 'Spread Em Settings', 'spread-em' ),
+			SpreadEm_Permissions::CAP_VIEW_LOGS,
+			self::SETTINGS_PAGE_SLUG,
+			[ __CLASS__, 'render_settings_page' ]
+		);
+	}
+
+	/**
+	 * Return the capability required to save plugin settings.
+	 *
+	 * @param string $capability Existing option-page capability.
+	 * @return string
+	 */
+	public static function settings_page_capability( string $capability = 'manage_options' ): string {
+		return SpreadEm_Permissions::CAP_VIEW_LOGS;
+	}
+
+	/**
+	 * Register shared-host tuning settings.
+	 */
+	public static function register_settings(): void {
+		register_setting(
+			'spread_em_settings',
+			self::OPTION_LIVE_TUNING,
+			[
+				'type'              => 'array',
+				'sanitize_callback' => [ __CLASS__, 'sanitize_live_tuning_options' ],
+				'default'           => self::get_live_tuning_defaults(),
+			]
+		);
+
+		add_settings_section(
+			'spread_em_live_tuning_section',
+			__( 'Shared-host collaboration tuning', 'spread-em' ),
+			static function (): void {
+				echo '<p>' . esc_html__( 'Increase these values to reduce AJAX and transient churn on weaker hosting plans. Lower values feel more immediate, but generate more background traffic.', 'spread-em' ) . '</p>';
+			},
+			self::SETTINGS_PAGE_SLUG
+		);
+
+		$fields = [
+			'poll_interval' => [
+				'label'       => __( 'Draft poll interval (visible tab, ms)', 'spread-em' ),
+				'min'         => 2000,
+				'max'         => 300000,
+				'step'        => 100,
+				'description' => __( 'How often editors check for unsaved draft deltas while the tab is active.', 'spread-em' ),
+			],
+			'poll_hidden_interval' => [
+				'label'       => __( 'Draft poll interval (hidden tab, ms)', 'spread-em' ),
+				'min'         => 5000,
+				'max'         => 300000,
+				'step'        => 100,
+				'description' => __( 'Use a slower cadence when the browser tab is not visible.', 'spread-em' ),
+			],
+			'meta_poll_interval' => [
+				'label'       => __( 'Metadata poll interval (visible tab, ms)', 'spread-em' ),
+				'min'         => 5000,
+				'max'         => 300000,
+				'step'        => 100,
+				'description' => __( 'Controls presence, IM, and operator-activity refreshes while active.', 'spread-em' ),
+			],
+			'meta_poll_hidden_interval' => [
+				'label'       => __( 'Metadata poll interval (hidden tab, ms)', 'spread-em' ),
+				'min'         => 10000,
+				'max'         => 300000,
+				'step'        => 100,
+				'description' => __( 'Slower metadata refresh when the tab is hidden.', 'spread-em' ),
+			],
+			'debounce_ms' => [
+				'label'       => __( 'Draft debounce delay (ms)', 'spread-em' ),
+				'min'         => 100,
+				'max'         => 10000,
+				'step'        => 50,
+				'description' => __( 'Wait time after the last keystroke before a draft change is pushed.', 'spread-em' ),
+			],
+			'draft_ttl' => [
+				'label'       => __( 'Draft TTL (seconds)', 'spread-em' ),
+				'min'         => 30,
+				'max'         => DAY_IN_SECONDS,
+				'step'        => 5,
+				'description' => __( 'How long unsaved draft deltas are kept server-side before auto-expiring.', 'spread-em' ),
+			],
+			'live_state_ttl' => [
+				'label'       => __( 'Live state TTL (seconds)', 'spread-em' ),
+				'min'         => MINUTE_IN_SECONDS,
+				'max'         => DAY_IN_SECONDS,
+				'step'        => 30,
+				'description' => __( 'How long presence, IM, and operator activity stay in transient storage.', 'spread-em' ),
+			],
+			'presence_heartbeat_interval' => [
+				'label'       => __( 'Presence heartbeat write interval (seconds)', 'spread-em' ),
+				'min'         => 5,
+				'max'         => 600,
+				'step'        => 1,
+				'description' => __( 'Minimum delay between presence writes during metadata polls.', 'spread-em' ),
+			],
+		];
+
+		foreach ( $fields as $key => $field ) {
+			add_settings_field(
+				'spread_em_live_tuning_' . $key,
+				$field['label'],
+				[ __CLASS__, 'render_live_tuning_number_field' ],
+				self::SETTINGS_PAGE_SLUG,
+				'spread_em_live_tuning_section',
+				array_merge( $field, [ 'key' => $key ] )
+			);
+		}
+	}
+
+	/**
+	 * Render the settings page.
+	 */
+	public static function render_settings_page(): void {
+		if ( ! self::current_user_can_manage_settings() ) {
+			wp_die( esc_html__( 'You do not have permission to access this page.', 'spread-em' ) );
+		}
+		?>
+		<div class="wrap">
+			<h1><?php esc_html_e( 'Spread Em Settings', 'spread-em' ); ?></h1>
+			<p><?php esc_html_e( 'Use these knobs to reduce collaboration load on shared or lower-memory hosting. Higher intervals mean less background chatter, but slower live updates.', 'spread-em' ); ?></p>
+			<?php settings_errors( 'spread_em_settings' ); ?>
+			<form action="options.php" method="post">
+				<?php
+				settings_fields( 'spread_em_settings' );
+				do_settings_sections( self::SETTINGS_PAGE_SLUG );
+				submit_button( __( 'Save Settings', 'spread-em' ) );
+				?>
+			</form>
+		</div>
+		<?php
+	}
+
+	/**
+	 * Render a numeric settings field.
+	 *
+	 * @param array<string,mixed> $args Field configuration.
+	 */
+	public static function render_live_tuning_number_field( array $args ): void {
+		$key     = isset( $args['key'] ) ? sanitize_key( (string) $args['key'] ) : '';
+		$options = self::get_saved_live_tuning_options();
+		$value   = isset( $options[ $key ] ) ? (int) $options[ $key ] : 0;
+		$min     = isset( $args['min'] ) ? (int) $args['min'] : 0;
+		$max     = isset( $args['max'] ) ? (int) $args['max'] : 0;
+		$step    = isset( $args['step'] ) ? (int) $args['step'] : 1;
+		$name    = self::OPTION_LIVE_TUNING . '[' . $key . ']';
+
+		printf(
+			'<input type="number" class="small-text" id="%1$s" name="%2$s" value="%3$d" min="%4$d" max="%5$d" step="%6$d" />',
+			esc_attr( self::OPTION_LIVE_TUNING . '_' . $key ),
+			esc_attr( $name ),
+			(int) $value,
+			(int) $min,
+			(int) $max,
+			(int) $step
+		);
+
+		if ( ! empty( $args['description'] ) ) {
+			echo '<p class="description">' . esc_html( (string) $args['description'] ) . '</p>';
+		}
+	}
+
+	/**
+	 * Return the persisted tuning values merged with defaults.
+	 *
+	 * @return array<string,int>
+	 */
+	private static function get_saved_live_tuning_options(): array {
+		$stored = get_option( self::OPTION_LIVE_TUNING, [] );
+		$stored = is_array( $stored ) ? $stored : [];
+
+		return self::sanitize_live_tuning_options( wp_parse_args( $stored, self::get_live_tuning_defaults() ) );
+	}
+
+	/**
+	 * Return default shared-host tuning values.
+	 *
+	 * @return array<string,int>
+	 */
+	private static function get_live_tuning_defaults(): array {
+		return [
+			'poll_interval'                => 10000,
+			'poll_hidden_interval'         => 30000,
+			'meta_poll_interval'           => 25000,
+			'meta_poll_hidden_interval'    => 60000,
+			'debounce_ms'                  => 500,
+			'draft_ttl'                    => 120,
+			'live_state_ttl'               => HOUR_IN_SECONDS,
+			'presence_heartbeat_interval'  => 20,
+		];
+	}
+
+	/**
+	 * Sanitize the shared-host tuning option array.
+	 *
+	 * @param mixed $input Raw option payload.
+	 * @return array<string,int>
+	 */
+	public static function sanitize_live_tuning_options( $input ): array {
+		$input    = is_array( $input ) ? $input : [];
+		$defaults = self::get_live_tuning_defaults();
+
+		return [
+			'poll_interval'               => self::sanitize_live_tuning_number( $input['poll_interval'] ?? $defaults['poll_interval'], 2000, 300000, $defaults['poll_interval'] ),
+			'poll_hidden_interval'        => self::sanitize_live_tuning_number( $input['poll_hidden_interval'] ?? $defaults['poll_hidden_interval'], 5000, 300000, $defaults['poll_hidden_interval'] ),
+			'meta_poll_interval'          => self::sanitize_live_tuning_number( $input['meta_poll_interval'] ?? $defaults['meta_poll_interval'], 5000, 300000, $defaults['meta_poll_interval'] ),
+			'meta_poll_hidden_interval'   => self::sanitize_live_tuning_number( $input['meta_poll_hidden_interval'] ?? $defaults['meta_poll_hidden_interval'], 10000, 300000, $defaults['meta_poll_hidden_interval'] ),
+			'debounce_ms'                 => self::sanitize_live_tuning_number( $input['debounce_ms'] ?? $defaults['debounce_ms'], 100, 10000, $defaults['debounce_ms'] ),
+			'draft_ttl'                   => self::sanitize_live_tuning_number( $input['draft_ttl'] ?? $defaults['draft_ttl'], 30, DAY_IN_SECONDS, $defaults['draft_ttl'] ),
+			'live_state_ttl'              => self::sanitize_live_tuning_number( $input['live_state_ttl'] ?? $defaults['live_state_ttl'], MINUTE_IN_SECONDS, DAY_IN_SECONDS, $defaults['live_state_ttl'] ),
+			'presence_heartbeat_interval' => self::sanitize_live_tuning_number( $input['presence_heartbeat_interval'] ?? $defaults['presence_heartbeat_interval'], 5, 600, $defaults['presence_heartbeat_interval'] ),
+		];
+	}
+
+	/**
+	 * Return the effective live runtime settings after filters are applied.
+	 *
+	 * @return array<string,int|bool>
+	 */
+	public static function get_live_runtime_settings(): array {
+		$settings = self::get_saved_live_tuning_options();
+
+		$settings['poll_interval'] = max( 2000, (int) apply_filters( 'spread_em_live_draft_poll_interval', $settings['poll_interval'] ) );
+		$settings['poll_hidden_interval'] = max( 5000, (int) apply_filters( 'spread_em_live_draft_poll_hidden_interval', $settings['poll_hidden_interval'] ) );
+		$settings['meta_poll_interval'] = max( 5000, (int) apply_filters( 'spread_em_live_meta_poll_interval', $settings['meta_poll_interval'] ) );
+		$settings['meta_poll_hidden_interval'] = max( 10000, (int) apply_filters( 'spread_em_live_meta_poll_hidden_interval', $settings['meta_poll_hidden_interval'] ) );
+		$settings['debounce_ms'] = max( 100, (int) apply_filters( 'spread_em_live_debounce_ms', $settings['debounce_ms'] ) );
+		$settings['draft_ttl'] = max( 30, (int) apply_filters( 'spread_em_live_draft_ttl', $settings['draft_ttl'] ) );
+		$settings['live_state_ttl'] = max( MINUTE_IN_SECONDS, (int) apply_filters( 'spread_em_live_state_ttl', $settings['live_state_ttl'] ) );
+		$settings['presence_heartbeat_interval'] = max( 5, (int) apply_filters( 'spread_em_live_presence_heartbeat_interval', $settings['presence_heartbeat_interval'] ) );
+		$settings['shared_host_mode'] = (bool) apply_filters( 'spread_em_live_shared_host_mode', true );
+
+		return $settings;
+	}
+
+	/**
+	 * Return a single live runtime setting.
+	 *
+	 * @param string $key      Setting key.
+	 * @param mixed  $fallback Fallback value.
+	 * @return mixed
+	 */
+	public static function get_live_runtime_setting( string $key, $fallback = null ) {
+		$settings = self::get_live_runtime_settings();
+		return array_key_exists( $key, $settings ) ? $settings[ $key ] : $fallback;
+	}
+
+	/**
+	 * Check whether current user can manage plugin settings.
+	 *
+	 * @return bool
+	 */
+	private static function current_user_can_manage_settings(): bool {
+		return current_user_can( SpreadEm_Permissions::CAP_VIEW_LOGS );
+	}
+
+	/**
+	 * Clamp a numeric tuning field to a safe range.
+	 *
+	 * @param mixed $value Raw incoming value.
+	 * @param int   $min   Minimum allowed value.
+	 * @param int   $max   Maximum allowed value.
+	 * @param int   $default Default fallback.
+	 * @return int
+	 */
+	private static function sanitize_live_tuning_number( $value, int $min, int $max, int $default ): int {
+		if ( '' === $value || null === $value || ! is_numeric( $value ) ) {
+			return $default;
+		}
+
+		$value = (int) $value;
+		$value = max( $min, $value );
+		$value = min( $max, $value );
+
+		return $value;
 	}
 
 	/**
@@ -123,9 +417,10 @@ class SpreadEm_Admin {
 		$full_workspace = self::should_use_full_workspace();
 		$product_ids    = $full_workspace ? [] : self::get_selected_product_ids();
 		$products       = self::get_products_for_editor( $product_ids );
-		$columns     = self::get_column_definitions( $products );
-		$session_id  = self::build_live_session_id( $product_ids, $products );
-		$current_user = wp_get_current_user();
+		$columns        = self::get_column_definitions( $products );
+		$session_id     = self::build_live_session_id( $product_ids, $products );
+		$current_user   = wp_get_current_user();
+		$live_settings  = self::get_live_runtime_settings();
 
 		self::register_live_scope( $products, $full_workspace );
 
@@ -138,13 +433,16 @@ class SpreadEm_Admin {
 				'products' => $products,
 				'columns'  => $columns,
 				'live'     => [
-					'enabled'              => true,
-					'session_id'           => $session_id,
-					'nonce'                => wp_create_nonce( 'spread_em_live_nonce' ),
-					'poll_interval'        => 10000,
-					'poll_hidden_interval' => 30000,
-					'debounce_ms'          => 500,
-					'full_workspace'       => $full_workspace,
+					'enabled'                   => true,
+					'session_id'                => $session_id,
+					'nonce'                     => wp_create_nonce( 'spread_em_live_nonce' ),
+					'poll_interval'             => (int) $live_settings['poll_interval'],
+					'poll_hidden_interval'      => (int) $live_settings['poll_hidden_interval'],
+					'meta_poll_interval'        => (int) $live_settings['meta_poll_interval'],
+					'meta_poll_hidden_interval' => (int) $live_settings['meta_poll_hidden_interval'],
+					'debounce_ms'               => (int) $live_settings['debounce_ms'],
+					'shared_host_mode'          => (bool) $live_settings['shared_host_mode'],
+					'full_workspace'            => $full_workspace,
 				],
 				'current_user' => [
 					'id'   => get_current_user_id(),

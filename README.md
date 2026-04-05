@@ -99,7 +99,8 @@ Spread Em includes a lightweight mechanism that lets multiple admins see each ot
 2. The push is sent to the `spread_em_save_draft` AJAX endpoint, which stores it in a WordPress transient under a session-specific key.  
 3. Other admins on the same editor session poll the `spread_em_poll_draft` endpoint at a configurable interval (default **10 seconds**).  
 4. When the server version has not advanced since the client's last token the response is a tiny `{"has_updates":false}` JSON object — no DOM update occurs and the DB write is skipped, keeping shared-hosting load minimal.  
-5. When there are new deltas the server returns only the changed `(product_id, field, value)` tuples and the editor applies them to any cell that is not currently focused.
+5. Presence / IM / operator-console activity are polled on a **slower metadata loop** than draft cell deltas, so shared hosts spend most of their time answering cheap read requests instead of repeated full live-state writes.  
+6. When there are new deltas the server returns only the changed `(product_id, field, value)` tuples and the editor applies them to any cell that is not currently focused.
 
 ### Ghost entry prevention
 
@@ -112,10 +113,14 @@ Spread Em includes a lightweight mechanism that lets multiple admins see each ot
 |---|---|---|
 | `poll_interval` | 10 000 ms | Draft poll interval when the browser tab is visible |
 | `poll_hidden_interval` | 30 000 ms | Draft poll interval when the browser tab is hidden |
+| `meta_poll_interval` | 25 000 ms | Heavier presence / IM / activity poll interval when visible |
+| `meta_poll_hidden_interval` | 60 000 ms | Heavier presence / IM / activity poll interval when hidden |
 | `debounce_ms` | 500 ms | How long to wait after the last keystroke before sending a draft push |
-| `DRAFT_TTL` | 120 s | Server-side transient TTL; drafts expire automatically without a cleanup job |
+| `draft_ttl` | 120 s | Server-side draft transient TTL; stale draft deltas auto-expire |
+| `live_state_ttl` | 3600 s | Server-side TTL for presence, IM, and operator activity |
+| `presence_heartbeat_interval` | 20 s | Minimum delay between presence heartbeat writes |
 
-These are set in `SpreadEm_Admin::enqueue_assets()` (PHP) and read by `spreadEmData.live` (JavaScript). To change them without editing plugin files, hook into `admin_enqueue_scripts` at a later priority and call `wp_localize_script` with updated values.
+These can now be adjusted in **WooCommerce → Spread Em Settings** without editing plugin files. For code-enforced deployments, the same values can still be overridden with filters such as `spread_em_live_draft_poll_interval`, `spread_em_live_meta_poll_interval`, `spread_em_live_draft_ttl`, `spread_em_live_state_ttl`, and `spread_em_live_presence_heartbeat_interval`. 
 
 ### Limitations
 

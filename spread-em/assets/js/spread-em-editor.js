@@ -66,6 +66,7 @@
 	let liveVersion = 0;
 	let draftToken = 0;
 	let livePollTimer = null;
+	let liveMetaPollTimer = null;
 	/** Per-cell debounce timers keyed by "productId:key". */
 	const saveDraftTimers = {};
 	let isApplyingRemote = false;
@@ -448,7 +449,9 @@
 
 		if ( liveConfig.enabled && ! isApplyingRemote ) {
 			pushLiveRowClaim( rowIndex );
-			pushLiveCellChange( rowIndex, key, newValue );
+			// Draft sync is the authoritative unsaved-cell channel on shared hosts.
+			// It is debounced and idempotent, which is much cheaper than pushing a
+			// second per-cell live payload for every edit.
 			saveDraft( rowIndex, key, newValue );
 		}
 
@@ -464,40 +467,72 @@
 	 * ---------------------------------------------------------------------- */
 
 	function startLiveSessionSync() {
-		// Initial full fetch for presence / IM / activity (heavier, less frequent).
-		// pollDraft() handles lightweight cell-delta polling separately via
-		// scheduleDraftPoll() below.
+		// Full metadata fetch for presence / IM / activity runs on its own slower
+		// cadence; pollDraft() handles the lightweight unsaved-cell deltas.
 		pullLiveState( true );
 		scheduleDraftPoll();
+		scheduleMetaPoll();
 
-		// Adjust poll cadence whenever the tab visibility changes.
+		// Adjust both polling loops whenever the tab visibility changes.
 		document.addEventListener( 'visibilitychange', function () {
-			if ( livePollTimer ) {
-				clearTimeout( livePollTimer );
-				livePollTimer = null;
-			}
+			clearScheduledPolls();
 			scheduleDraftPoll();
+			scheduleMetaPoll();
 		} );
+	}
+
+	function clearScheduledPolls() {
+		if ( livePollTimer ) {
+			clearTimeout( livePollTimer );
+			livePollTimer = null;
+		}
+
+		if ( liveMetaPollTimer ) {
+			clearTimeout( liveMetaPollTimer );
+			liveMetaPollTimer = null;
+		}
 	}
 
 	/**
 	 * Schedule the next draft poll with adaptive interval and jitter.
 	 *
-	 * When the document is hidden the interval grows to poll_hidden_interval
-	 * (default 30 s) to avoid unnecessary server load on shared hosting.
-	 * A ±10 % jitter prevents thundering-herd effects when multiple tabs
-	 * or users happen to open the editor simultaneously.
+	 * Draft polling remains the cheapest sync loop, so it can stay relatively
+	 * frequent. When the sheet is idle or the tab is hidden we back off further.
 	 */
 	function scheduleDraftPoll() {
-		const baseInterval   = parseInt( liveConfig.poll_interval, 10 ) || 10000;
+		const baseInterval = parseInt( liveConfig.poll_interval, 10 ) || 10000;
 		const hiddenInterval = parseInt( liveConfig.poll_hidden_interval, 10 ) || 30000;
-		const interval       = document.hidden ? hiddenInterval : baseInterval;
-		const jitter         = Math.floor( ( Math.random() - 0.5 ) * 0.2 * interval );
-		const delay          = Math.max( 1000, interval + jitter );
+		const activeEditors = Object.keys( activePresence || {} ).length;
+		const isIdle = ! isDirty && activeEditors <= 1;
+		const base = document.hidden ? hiddenInterval : baseInterval;
+		const interval = Math.round( base * ( isIdle ? 1.5 : 1 ) );
+		const jitter = Math.floor( ( Math.random() - 0.5 ) * 0.2 * interval );
+		const delay = Math.max( 1000, interval + jitter );
 
 		livePollTimer = window.setTimeout( function () {
 			pollDraft( false );
 			scheduleDraftPoll();
+		}, delay );
+	}
+
+	/**
+	 * Schedule the slower metadata poll used for presence, IM, row claims, and
+	 * operator-console activity. This stays intentionally slower than draft sync
+	 * so shared-host installs do not hammer the transient table.
+	 */
+	function scheduleMetaPoll() {
+		const baseInterval = parseInt( liveConfig.meta_poll_interval, 10 ) || 25000;
+		const hiddenInterval = parseInt( liveConfig.meta_poll_hidden_interval, 10 ) || 60000;
+		const activeEditors = Object.keys( activePresence || {} ).length;
+		const isIdle = ! isDirty && activeEditors <= 1;
+		const base = document.hidden ? hiddenInterval : baseInterval;
+		const interval = Math.round( base * ( isIdle ? 1.5 : 1 ) );
+		const jitter = Math.floor( ( Math.random() - 0.5 ) * 0.2 * interval );
+		const delay = Math.max( 5000, interval + jitter );
+
+		liveMetaPollTimer = window.setTimeout( function () {
+			pullLiveState( false );
+			scheduleMetaPoll();
 		}, delay );
 	}
 
