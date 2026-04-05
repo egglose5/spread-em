@@ -155,6 +155,7 @@
 		buildHeader();
 		buildBody();
 		layoutHelpers.syncColumnWidthsForContent();
+		updateRowOwnerBadges( rowOwners );
 	}
 
 	function buildHeader() {
@@ -717,6 +718,7 @@
 			rowOwners = response.data.row_owners || {};
 			liveActivity = response.data.activity || [];
 			updateLivePresence( activePresence );
+			updateRowOwnerBadges( rowOwners );
 			if ( liveConfig.full_workspace ) {
 				updateGlobalOperatorConsole( activePresence, rowOwners, liveActivity );
 			}
@@ -801,6 +803,71 @@
 		}
 
 		$cell.text( value );
+	}
+
+	/**
+	 * Render or refresh highlighted owner badges on every table row.
+	 *
+	 * Each row that has at least one live owner receives a coloured badge in its
+	 * first cell so that all collaborators can see at a glance who currently has
+	 * control of which row.  Owners who are the current user get a distinct
+	 * green badge; other users' names appear in blue.
+	 *
+	 * @param {Object} rowOwnerMap  row_owners map from the live-pull response.
+	 */
+	function updateRowOwnerBadges( rowOwnerMap ) {
+		if ( ! liveConfig.enabled ) {
+			return;
+		}
+
+		currentData.forEach( function ( product, rowIndex ) {
+			const productId = parseInt( product.id, 10 );
+			const $tr       = $( '#spread-em-tbody tr[data-row="' + rowIndex + '"]' );
+			const $firstTd  = $tr.find( 'td:first-child' );
+
+			// Remove any existing badge before re-rendering.
+			$firstTd.find( '.spread-em-row-owner-badge' ).remove();
+
+			if ( Number.isNaN( productId ) || productId <= 0 ) {
+				return;
+			}
+
+			const owners     = ( rowOwnerMap || {} )[ String( productId ) ] || {};
+			const otherNames = [];
+			let   hasSelf    = false;
+
+			Object.keys( owners ).forEach( function ( userIdKey ) {
+				const userId     = parseInt( userIdKey, 10 );
+				const ownerEntry = owners[ userIdKey ] || {};
+
+				if ( ! ownerEntry.name ) {
+					return;
+				}
+
+				if ( userId === currentUser.id ) {
+					hasSelf = true;
+				} else {
+					otherNames.push( String( ownerEntry.name ) );
+				}
+			} );
+
+			if ( otherNames.length ) {
+				// One or more other users own this row – show their names in blue.
+				const label    = otherNames.map( escapeHtml ).join( ', ' );
+				const ariaVerb = otherNames.length > 1 ? ' are editing this row' : ' is editing this row';
+				$firstTd.append(
+					'<span class="spread-em-row-owner-badge" aria-label="' +
+					escapeHtml( otherNames.join( ', ' ) ) + ariaVerb + '">' +
+					label + '</span>'
+				);
+			} else if ( hasSelf ) {
+				// Only the current user owns the row – green self-badge.
+				$firstTd.append(
+					'<span class="spread-em-row-owner-badge spread-em-row-owner-badge--self" aria-label="You are editing this row">' +
+					escapeHtml( currentUser.name ) + '</span>'
+				);
+			}
+		} );
 	}
 
 	function updateLivePresence( presenceMap ) {

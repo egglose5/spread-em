@@ -573,6 +573,30 @@ body.spread-em-col-resizing * {
 }
 
 /* --------------------------------------------------------------------------
+   Row owner badge – live session row ownership indicator
+   -------------------------------------------------------------------------- */
+
+.spread-em-row-owner-badge {
+	display: inline-block;
+	margin-left: 6px;
+	padding: 1px 7px;
+	border-radius: 3px;
+	font-size: 11px;
+	font-weight: 700;
+	white-space: nowrap;
+	vertical-align: middle;
+	background: #e3f2fd;
+	border: 1px solid #90caf9;
+	color: #1565c0;
+}
+
+.spread-em-row-owner-badge--self {
+	background: #e8f5e9;
+	border-color: #66bb6a;
+	color: #2e7d32;
+}
+
+/* --------------------------------------------------------------------------
    Responsive tweaks
    -------------------------------------------------------------------------- */
 
