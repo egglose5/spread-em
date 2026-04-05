@@ -458,6 +458,7 @@ class SpreadEm_Admin {
 					'saving'           => __( 'Saving…', 'spread-em' ),
 					'saved'            => __( 'All changes saved!', 'spread-em' ),
 					'save_error'       => __( 'Save failed. Please try again.', 'spread-em' ),
+					'save_conflict'    => __( 'Some rows changed on the server before your save. Review the highlighted rows and save again if needed.', 'spread-em' ),
 					'nothing_to_undo'  => __( 'Nothing to undo.', 'spread-em' ),
 					'confirm_save'     => __( 'Save all pending changes to the database?', 'spread-em' ),
 					'back_to_products' => __( '← Back to Products', 'spread-em' ),
@@ -917,7 +918,7 @@ class SpreadEm_Admin {
 	private static function product_to_row( \WC_Product $product ): array {
 		$cats = wc_get_product_category_list( $product->get_id(), ', ' );
 
-		return [
+		$row = [
 			'id'                 => $product->get_id(),
 			'parent_id'          => 0,
 			'is_variation'       => false,
@@ -945,6 +946,10 @@ class SpreadEm_Admin {
 			'attributes'         => self::get_product_attributes_summary( $product ),
 			'custom_meta_map'    => self::get_custom_meta_map( $product->get_id() ),
 		];
+
+		$row['_spread_em_revision'] = self::build_row_revision_token( $row );
+
+		return $row;
 	}
 
 	/**
@@ -968,7 +973,7 @@ class SpreadEm_Admin {
 			$attrs[] = $label . ': ' . $attr_value;
 		}
 
-		return [
+		$row = [
 			'id'                 => $variation->get_id(),
 			'parent_id'          => $parent_id,
 			'is_variation'       => true,
@@ -996,6 +1001,10 @@ class SpreadEm_Admin {
 			'attributes'         => implode( ' | ', $attrs ),
 			'custom_meta_map'    => self::get_custom_meta_map( $variation->get_id() ),
 		];
+
+		$row['_spread_em_revision'] = self::build_row_revision_token( $row );
+
+		return $row;
 	}
 
 	/**
@@ -1081,6 +1090,71 @@ class SpreadEm_Admin {
 		$meta_key = substr( $column_key, strlen( self::META_COLUMN_PREFIX ) );
 
 		return '' === $meta_key ? null : $meta_key;
+	}
+
+	/**
+	 * Build a stable revision token for one product row.
+	 *
+	 * @param array<string,mixed> $row Product row payload.
+	 * @return string
+	 */
+	public static function build_row_revision_token( array $row ): string {
+		unset( $row['_spread_em_revision'] );
+
+		$normalized = self::normalize_row_for_revision( $row );
+		$json       = wp_json_encode( $normalized );
+
+		return md5( is_string( $json ) ? $json : serialize( $normalized ) );
+	}
+
+	/**
+	 * Build the current revision token for a WooCommerce product object.
+	 *
+	 * @param \WC_Product $product Product object.
+	 * @return string
+	 */
+	public static function get_product_revision_token( \WC_Product $product ): string {
+		if ( $product->is_type( 'variation' ) && $product instanceof \WC_Product_Variation ) {
+			$row = self::variation_to_row( $product, (int) $product->get_parent_id() );
+		} else {
+			$row = self::product_to_row( $product );
+		}
+
+		return isset( $row['_spread_em_revision'] ) ? (string) $row['_spread_em_revision'] : self::build_row_revision_token( $row );
+	}
+
+	/**
+	 * Normalize nested row values so revision hashes are stable.
+	 *
+	 * @param mixed $value Value to normalize.
+	 * @return mixed
+	 */
+	private static function normalize_row_for_revision( $value ) {
+		if ( is_object( $value ) ) {
+			$value = get_object_vars( $value );
+		}
+
+		if ( is_array( $value ) ) {
+			if ( self::is_assoc_array( $value ) ) {
+				ksort( $value );
+			}
+
+			foreach ( $value as $key => $item ) {
+				$value[ $key ] = self::normalize_row_for_revision( $item );
+			}
+		}
+
+		return $value;
+	}
+
+	/**
+	 * Determine whether an array uses associative keys.
+	 *
+	 * @param array<mixed> $value Input array.
+	 * @return bool
+	 */
+	private static function is_assoc_array( array $value ): bool {
+		return array_keys( $value ) !== range( 0, count( $value ) - 1 );
 	}
 
 	/**

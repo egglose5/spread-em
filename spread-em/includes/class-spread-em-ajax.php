@@ -99,8 +99,9 @@ class SpreadEm_Ajax {
 
 		// 4. Process each changed row.
 		$save_state_id = sanitize_key( wp_generate_uuid4() );
-		$saved  = [];
-		$errors = [];
+		$saved         = [];
+		$errors        = [];
+		$conflicts     = [];
 
 		foreach ( $changes as $row ) {
 			if ( empty( $row['id'] ) || ! is_numeric( $row['id'] ) ) {
@@ -116,11 +117,19 @@ class SpreadEm_Ajax {
 				continue;
 			}
 
-			$product    = wc_get_product( $product_id );
+			$product = wc_get_product( $product_id );
 
 			if ( ! $product ) {
 				/* translators: %d: product ID */
 				$errors[] = sprintf( __( 'Product %d not found.', 'spread-em' ), $product_id );
+				continue;
+			}
+
+			$client_revision = isset( $row['_spread_em_revision'] ) ? sanitize_text_field( (string) $row['_spread_em_revision'] ) : '';
+			$server_revision = self::get_product_revision_token( $product );
+
+			if ( self::row_has_revision_conflict( $client_revision, $server_revision ) ) {
+				$conflicts[] = self::build_save_conflict( $product, $client_revision, $server_revision );
 				continue;
 			}
 
@@ -137,7 +146,7 @@ class SpreadEm_Ajax {
 
 				// Log each field that actually changed.
 				if ( class_exists( 'SpreadEm_Logger' ) ) {
-					$user_id      = get_current_user_id();
+					$user_id       = get_current_user_id();
 					$saved_product = wc_get_product( $product_id );
 
 					if ( $saved_product ) {
@@ -154,17 +163,14 @@ class SpreadEm_Ajax {
 			}
 		}
 
-		if ( ! empty( $errors ) ) {
-			wp_send_json_error(
-				[
-					'message' => implode( "\n", $errors ),
-					'saved'   => $saved,
-				],
-				422
-			);
-		}
-
-		$parent_ids = self::get_context_parent_ids( $saved );
+		$affected_product_ids = array_values(
+			array_unique(
+				array_filter(
+					array_merge( $saved, self::extract_conflict_product_ids( $conflicts ) )
+				)
+			)
+		);
+		$parent_ids = self::get_context_parent_ids( $affected_product_ids );
 		$products   = [];
 
 		if ( '' !== $live_session_id && ! empty( $saved ) ) {
@@ -189,11 +195,32 @@ class SpreadEm_Ajax {
 			$products = SpreadEm_Admin::get_products_for_editor( $parent_ids );
 		}
 
+		if ( ! empty( $errors ) || ! empty( $conflicts ) ) {
+			$message = self::build_save_error_message( $errors, $conflicts );
+
+			if ( ! empty( $saved ) && ! empty( $conflicts ) ) {
+				$partial_prefix = function_exists( '__' )
+					? sprintf( __( 'Saved %d row(s) before the conflict was detected.', 'spread-em' ), count( $saved ) )
+					: sprintf( 'Saved %d row(s) before the conflict was detected.', count( $saved ) );
+				$message = $partial_prefix . "\n" . $message;
+			}
+
+			wp_send_json_error(
+				[
+					'message'    => $message,
+					'saved'      => $saved,
+					'conflicts'  => $conflicts,
+					'products'   => $products,
+				],
+				! empty( $conflicts ) ? 409 : 422
+			);
+		}
+
 		wp_send_json_success(
 			[
-				'saved'          => $saved,
-				'products'       => $products,
-				'save_state_id'  => $save_state_id,
+				'saved'         => $saved,
+				'products'      => $products,
+				'save_state_id' => $save_state_id,
 			]
 		);
 	}
@@ -1102,6 +1129,109 @@ class SpreadEm_Ajax {
 		$context_parent_ids = array_values( array_unique( array_filter( $context_parent_ids ) ) );
 
 		return $context_parent_ids;
+	}
+
+	/**
+	 * Extract product IDs from a conflict payload list.
+	 *
+	 * @param array<int,array<string,mixed>> $conflicts Conflict rows.
+	 * @return array<int,int>
+	 */
+	private static function extract_conflict_product_ids( array $conflicts ): array {
+		$ids = [];
+
+		foreach ( $conflicts as $conflict ) {
+			if ( empty( $conflict['product_id'] ) ) {
+				continue;
+			}
+
+			$ids[] = absint( (int) $conflict['product_id'] );
+		}
+
+		return array_values( array_unique( array_filter( $ids ) ) );
+	}
+
+	/**
+	 * Determine whether a stale client row revision conflicts with the server.
+	 *
+	 * @param string $client_revision Revision token from the browser.
+	 * @param string $server_revision Current server-side revision token.
+	 * @return bool
+	 */
+	private static function row_has_revision_conflict( string $client_revision, string $server_revision ): bool {
+		return '' !== $client_revision && '' !== $server_revision && $client_revision !== $server_revision;
+	}
+
+	/**
+	 * Build a structured conflict payload for the client.
+	 *
+	 * @param \WC_Product $product         Current product object.
+	 * @param string      $client_revision Client revision token.
+	 * @param string      $server_revision Server revision token.
+	 * @return array<string,mixed>
+	 */
+	private static function build_save_conflict( \WC_Product $product, string $client_revision, string $server_revision ): array {
+		return [
+			'product_id'      => (int) $product->get_id(),
+			'product_name'    => method_exists( $product, 'get_name' ) ? (string) $product->get_name() : '',
+			'client_revision' => $client_revision,
+			'server_revision' => $server_revision,
+		];
+	}
+
+	/**
+	 * Build a human-readable error message for save failures and conflicts.
+	 *
+	 * @param array<int,string>             $errors    Validation/save errors.
+	 * @param array<int,array<string,mixed>> $conflicts Conflict rows.
+	 * @return string
+	 */
+	private static function build_save_error_message( array $errors, array $conflicts ): string {
+		$messages = array_values( array_filter( $errors ) );
+
+		if ( ! empty( $conflicts ) ) {
+			$labels = [];
+
+			foreach ( $conflicts as $conflict ) {
+				$product_id   = isset( $conflict['product_id'] ) ? absint( (int) $conflict['product_id'] ) : 0;
+				$product_name = isset( $conflict['product_name'] ) ? trim( (string) $conflict['product_name'] ) : '';
+				$label        = $product_id ? '#' . $product_id : '#?';
+
+				if ( '' !== $product_name ) {
+					$label .= ' ' . $product_name;
+				}
+
+				$labels[] = $label;
+			}
+
+			$prefix = function_exists( '__' )
+				? __( 'Save conflict detected for:', 'spread-em' )
+				: 'Save conflict detected for:';
+			$suffix = function_exists( '__' )
+				? __( 'Reloaded the latest server values. Review the highlighted rows and save again if you still want your edits.', 'spread-em' )
+				: 'Reloaded the latest server values. Review the highlighted rows and save again if you still want your edits.';
+
+			$messages[] = $prefix . ' ' . implode( ', ', $labels ) . '. ' . $suffix;
+		}
+
+		return implode( "\n", array_filter( $messages ) );
+	}
+
+	/**
+	 * Resolve the current revision token for a product.
+	 *
+	 * @param \WC_Product $product Product object.
+	 * @return string
+	 */
+	private static function get_product_revision_token( \WC_Product $product ): string {
+		if ( class_exists( 'SpreadEm_Admin' ) && method_exists( 'SpreadEm_Admin', 'get_product_revision_token' ) ) {
+			return (string) SpreadEm_Admin::get_product_revision_token( $product );
+		}
+
+		$modified = method_exists( $product, 'get_date_modified' ) ? $product->get_date_modified() : null;
+		$stamp    = is_object( $modified ) && method_exists( $modified, 'getTimestamp' ) ? (string) $modified->getTimestamp() : '';
+
+		return '' !== $stamp ? $product->get_id() . ':' . $stamp : md5( (string) $product->get_id() );
 	}
 
 	/**

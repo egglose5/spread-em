@@ -22,6 +22,7 @@ The core idea is simple: keep WooCommerce's existing catalogue and product data 
 - **Drag-to-resize columns** — grab the right edge of any column header and drag; widths are saved to `localStorage` and persist between sessions
 - **Undo last change** — single-level undo for quick corrections
 - **Save only what changed** — only dirty rows are sent to the server, keeping AJAX payloads minimal
+- **Save-time conflict detection** — if a product changed on the server after you loaded the sheet, Spread'em stops the stale overwrite, reloads the latest row data, and keeps your unsaved edits visible for review
 - **Hide parent rows** — toggle to show variations only for cleaner editing of large catalogues
 - **Change log with before/after values** — every saved field change is recorded with old/new values, user, and timestamp
 - **Save-state rollback** — each Save click is grouped into a save state so you can revert an entire save action from the log page

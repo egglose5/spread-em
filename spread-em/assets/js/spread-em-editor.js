@@ -1009,6 +1009,83 @@
 		$( '#spread-em-tbody tr[data-row="' + rowIndex + '"]' ).removeClass( 'spread-em-dirty' );
 	}
 
+	/**
+	 * Re-apply dirty row highlighting after a rebuild or server refresh.
+	 */
+	function syncDirtyRowHighlights() {
+		currentData.forEach( function ( row, rowIndex ) {
+			const originalRow = originalData[ rowIndex ] || {};
+			const rowIsDirty = columns.some( function ( col ) {
+				return ! col.readonly && String( row[ col.key ] ) !== String( originalRow[ col.key ] );
+			} );
+
+			if ( rowIsDirty ) {
+				markRowDirty( rowIndex );
+			} else {
+				markRowClean( rowIndex );
+			}
+		} );
+	}
+
+	/**
+	 * Apply the latest server rows after a save attempt while preserving any
+	 * rows that were not actually saved.
+	 *
+	 * @param {Object} responseData
+	 * @param {Array<Object>} requestedChanges
+	 */
+	function applySaveResponseData( responseData, requestedChanges ) {
+		if ( ! responseData || ! Array.isArray( responseData.products ) || ! responseData.products.length ) {
+			return;
+		}
+
+		const serverProducts = JSON.parse( JSON.stringify( responseData.products ) );
+		const savedIds = new Set( ( responseData.saved || [] ).map( function ( id ) {
+			return parseInt( id, 10 );
+		} ).filter( function ( id ) {
+			return ! Number.isNaN( id ) && id > 0;
+		} ) );
+		const requestedById = {};
+
+		( requestedChanges || [] ).forEach( function ( change ) {
+			const rowId = parseInt( change.id, 10 );
+			if ( ! Number.isNaN( rowId ) && rowId > 0 ) {
+				requestedById[ rowId ] = change;
+			}
+		} );
+
+		originalData = JSON.parse( JSON.stringify( serverProducts ) );
+		currentData = serverProducts.map( function ( serverRow ) {
+			const mergedRow = JSON.parse( JSON.stringify( serverRow ) );
+			const rowId = parseInt( mergedRow.id, 10 );
+			const pendingChange = requestedById[ rowId ];
+
+			if ( pendingChange && ! savedIds.has( rowId ) ) {
+				Object.keys( pendingChange ).forEach( function ( key ) {
+					if ( 'id' === key || '_spread_em_revision' === key ) {
+						return;
+					}
+					mergedRow[ key ] = pendingChange[ key ];
+				} );
+			}
+
+			return mergedRow;
+		} );
+
+		buildTable();
+		if ( $( '#spread-em-hide-parents' ).is( ':checked' ) ) {
+			$( '#spread-em-tbody tr.spread-em-parent-row' ).hide();
+		}
+		layoutHelpers.syncColumnWidthsForContent();
+		syncDirtyRowHighlights();
+		recalcDirty();
+
+		if ( ! isDirty ) {
+			lastChange = null;
+			$( '#spread-em-undo' ).prop( 'disabled', true );
+		}
+	}
+
 	/** -----------------------------------------------------------------------
 	 * Undo handler
 	 * ---------------------------------------------------------------------- */
@@ -1100,35 +1177,33 @@
 			},
 		} )
 			.done( function ( response ) {
+				if ( response && response.data ) {
+					applySaveResponseData( response.data, changes );
+				}
+
 				if ( response.success ) {
-					if ( response.data && Array.isArray( response.data.products ) && response.data.products.length ) {
-						currentData = JSON.parse( JSON.stringify( response.data.products ) );
-					}
-
-					// Accept all saved changes into the baseline.
-					originalData = JSON.parse( JSON.stringify( currentData ) );
-					lastChange   = null;
-					isDirty      = false;
-
-					// Rebuild table so inherited variation fields are refreshed.
-					buildTable();
-					if ( $( '#spread-em-hide-parents' ).is( ':checked' ) ) {
-						$( '#spread-em-tbody tr.spread-em-parent-row' ).hide();
-					}
-					layoutHelpers.syncColumnWidthsForContent();
-
+					lastChange = null;
+					isDirty    = false;
 					$( '#spread-em-undo' ).prop( 'disabled', true );
-
 					showStatus( spreadEmData.i18n.saved, 'success' );
 				} else {
 					const msg = ( response.data && response.data.message )
 						? response.data.message
-						: spreadEmData.i18n.save_error;
+						: ( spreadEmData.i18n.save_conflict || spreadEmData.i18n.save_error );
 					showStatus( msg, 'error' );
 				}
 			} )
-			.fail( function () {
-				showStatus( spreadEmData.i18n.save_error, 'error' );
+			.fail( function ( xhr ) {
+				const response = xhr && xhr.responseJSON ? xhr.responseJSON : null;
+
+				if ( response && response.data ) {
+					applySaveResponseData( response.data, changes );
+				}
+
+				const msg = response && response.data && response.data.message
+					? response.data.message
+					: ( xhr && 409 === xhr.status ? ( spreadEmData.i18n.save_conflict || spreadEmData.i18n.save_error ) : spreadEmData.i18n.save_error );
+				showStatus( msg, 'error' );
 			} )
 			.always( function () {
 				$saveBtn.prop( 'disabled', false ).text( spreadEmData.i18n.save );
@@ -1164,7 +1239,10 @@
 		const changes = [];
 
 		currentData.forEach( function ( row, i ) {
-			const diff = { id: row.id };
+			const diff = {
+				id: row.id,
+				_spread_em_revision: originalData[ i ] && originalData[ i ]._spread_em_revision ? originalData[ i ]._spread_em_revision : '',
+			};
 			let hasChange = false;
 
 			columns.forEach( function ( col ) {
