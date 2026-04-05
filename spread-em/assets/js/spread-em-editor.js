@@ -72,6 +72,9 @@
 	let liveActivity = [];
 	const claimedRowsByMe = {};
 
+	/** Per-field debounce timers for live push: key is `productId:fieldKey`. */
+	const livePushDebounceTimers = {};
+
 	/** -----------------------------------------------------------------------
 	 * Bootstrap
 	 * ---------------------------------------------------------------------- */
@@ -445,7 +448,7 @@
 
 		if ( liveConfig.enabled && ! isApplyingRemote ) {
 			pushLiveRowClaim( rowIndex );
-			pushLiveCellChange( rowIndex, key, newValue );
+			scheduleLiveCellPush( rowIndex, key, newValue );
 		}
 
 		isDirty = true;
@@ -461,10 +464,93 @@
 
 	function startLiveSessionSync() {
 		pullLiveState( true );
-		const interval = parseInt( liveConfig.poll_interval, 10 ) || 2500;
-		livePollTimer = window.setInterval( function () {
+		scheduleLivePoll();
+
+		// When the tab becomes visible again, skip the remainder of the backoff
+		// and re-sync immediately, then resume normal scheduling.
+		document.addEventListener( 'visibilitychange', function () {
+			if ( livePollTimer ) {
+				clearTimeout( livePollTimer );
+			}
+
+			if ( ! document.hidden ) {
+				pullLiveState( false );
+			}
+
+			scheduleLivePoll();
+		} );
+	}
+
+	/**
+	 * Return the next poll delay (ms), using a longer backoff when the document
+	 * is hidden (tab backgrounded) and adding a small random jitter.
+	 *
+	 * @returns {number}
+	 */
+	function getLivePollDelay() {
+		const base   = parseInt( liveConfig.poll_interval, 10 ) || 10000;
+		const hidden = typeof document !== 'undefined' && document.hidden;
+		const delay  = hidden ? Math.max( 30000, base * 3 ) : base;
+		// Add up to 1s jitter to spread server load across concurrent sessions.
+		return delay + Math.floor( Math.random() * 1000 );
+	}
+
+	/**
+	 * Schedule the next poll tick using an adaptive delay.
+	 */
+	function scheduleLivePoll() {
+		livePollTimer = window.setTimeout( function () {
 			pullLiveState( false );
-		}, interval );
+			scheduleLivePoll();
+		}, getLivePollDelay() );
+	}
+
+	/**
+	 * Generate a RFC 4122 v4 UUID for client-side idempotency tokens.
+	 *
+	 * @returns {string}
+	 */
+	function generateUUID() {
+		return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace( /[xy]/g, function ( c ) {
+			const r = Math.random() * 16 | 0;
+			const v = c === 'x' ? r : ( r & 0x3 | 0x8 );
+			return v.toString( 16 );
+		} );
+	}
+
+	/**
+	 * Schedule a debounced live push for one product field.
+	 *
+	 * Each (productId, key) pair gets its own 400 ms debounce timer so rapid
+	 * keystrokes only trigger a single AJAX request per field, while concurrent
+	 * edits to different fields are each sent independently.
+	 *
+	 * @param {number} rowIndex Row index in currentData.
+	 * @param {string} key      Column key.
+	 * @param {string} value    New field value (captured at schedule time; the
+	 *                          timer reads the latest value from currentData).
+	 */
+	function scheduleLiveCellPush( rowIndex, key, value ) {
+		const row = currentData[ rowIndex ];
+		if ( ! row || ! row.id ) {
+			return;
+		}
+
+		const productId = parseInt( row.id, 10 );
+		if ( Number.isNaN( productId ) || productId <= 0 ) {
+			return;
+		}
+
+		const timerKey = productId + ':' + key;
+		clearTimeout( livePushDebounceTimers[ timerKey ] );
+		livePushDebounceTimers[ timerKey ] = window.setTimeout( function () {
+			delete livePushDebounceTimers[ timerKey ];
+			const latestRow = currentData[ rowIndex ];
+			const latestVal = latestRow && latestRow[ key ] !== undefined
+				? String( latestRow[ key ] )
+				: value;
+			pushLiveCellChange( rowIndex, key, latestVal );
+		}, 400 );
 	}
 
 	function pushLiveCellChange( rowIndex, key, value ) {
@@ -477,13 +563,14 @@
 		$.post(
 			spreadEmData.ajax_url,
 			{
-				action: 'spread_em_live_push',
-				nonce: liveConfig.nonce,
-				session_id: liveConfig.session_id,
-				mode: 'update',
-				product_id: row.id,
-				key: key,
-				value: value,
+				action           : 'spread_em_live_push',
+				nonce            : liveConfig.nonce,
+				session_id       : liveConfig.session_id,
+				mode             : 'update',
+				product_id       : row.id,
+				key              : key,
+				value            : value,
+				client_request_id: generateUUID(),
 			}
 		).done( function ( response ) {
 			if ( response && response.success && response.data && response.data.version ) {

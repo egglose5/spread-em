@@ -94,7 +94,47 @@ If `composer` or `phpunit` is not installed on your machine yet, tests cannot ex
 - **Why this matters** — the spreadsheet editor is launched from the existing WooCommerce product catalogue selection flow, so this change helps parent-category selection behave the way many store owners expect when preparing a bulk edit.
 - **Compatibility implication** — if another plugin depends on the default exact-match-only behavior of the admin `product_cat` filter on the product list screen, test that interaction. Spread'em applies this change only in the admin main product query.
 
-## Permissions Model
+## Live Draft Sync
+
+Spread'em includes a lightweight **admin-only live draft sync** that lets multiple admins see each other's in-progress catalogue edits without a full page refresh, and prevents ghost entries caused by unacknowledged writes.
+
+### How it works
+
+1. **Push** – Each time a cell value is confirmed (on blur / selection change), the delta is sent to the server with a short debounce (≈400 ms per field). The server stores the current in-progress value in a WP transient keyed to the shared editing session.
+2. **Poll** – Each connected browser polls the server for changes since its last known version token. When another admin has pushed an update the server returns only the changed cells (delta), not the full dataset. If a cell currently has keyboard focus it is never overwritten.
+3. **Presence** – Every poll heartbeats the current user into a shared presence map so all admins see who else is actively editing.
+4. **Activity feed** – Push and save events are logged in a bounded activity feed (max 120 events, 30-minute TTL) visible to global-operator admins in the Live Operator Console.
+5. **Direct messaging** – Admins can send instant messages to other active users within the editing session.
+
+### Idempotency / ghost-entry prevention
+
+Each live-push AJAX request carries a `client_request_id` UUID. The server records the last 50 processed IDs per session; if an identical ID arrives again (network retry), the response is returned immediately without re-processing, preventing duplicate activity events.
+
+The final **Save All Changes** button is the only action that permanently commits edits to the WooCommerce database. The UI always waits for server acknowledgement before treating a save as successful.
+
+### Tuning knobs
+
+| Setting | Default | Description |
+|---|---|---|
+| `poll_interval` | `10000` ms (10 s) | Base polling cadence. Passed from PHP via `spreadEmData.live.poll_interval`. Increase for heavily loaded shared hosts. |
+| Background backoff | `max(30 s, poll_interval × 3)` | When the browser tab is hidden the poll interval is automatically lengthened to reduce idle load. |
+| Jitter | 0–1 s random | Added to every poll delay to spread concurrent sessions across the server. |
+| Push debounce | 400 ms per field | Rapid keystrokes in a single cell are collapsed into one AJAX request. |
+| Transient TTL | 1 hour (`HOUR_IN_SECONDS`) | How long session state persists server-side with no activity. |
+| Activity event TTL | 30 minutes | Stale activity events are pruned on every read. |
+| Presence TTL | 30 s | Users who stop polling drop out of the presence map. |
+
+### Limitations
+
+- **Not realtime** – Changes appear in peer browsers after the next poll cycle (default ≈10 s).
+- **Admin-only** – All sync endpoints are gated behind `wp_ajax_*` (logged-in users) and plugin capability checks (`spread_em_live_individual_contributor` / `spread_em_live_global_operator`). Non-admin users are never exposed.
+- **Requires JavaScript** – Live sync is entirely JS-driven; browsers with JS disabled will not receive peer edits.
+- **Transient storage** – Session state uses WP transients. On object-cache-less shared hosts this writes to the `wp_options` table. The data is small (bounded by cell count and activity cap) and auto-expires.
+- **Same WP install only** – Multi-site / multi-server setups sharing a single object cache will sync naturally; separate installs do not share session state.
+
+---
+
+
 
 Spread'em uses plugin capabilities (not hardcoded role names) so role-builder plugins can assign responsibilities as a drop-in setup.
 

@@ -141,7 +141,7 @@ class SpreadEm_Admin {
 					'enabled'       => true,
 					'session_id'    => $session_id,
 					'nonce'         => wp_create_nonce( 'spread_em_live_nonce' ),
-					'poll_interval' => 2500,
+					'poll_interval' => 10000,
 					'full_workspace' => $full_workspace,
 				],
 				'current_user' => [

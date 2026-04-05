@@ -186,11 +186,12 @@ class SpreadEm_Ajax {
 			wp_send_json_error( [ 'message' => __( 'You do not have permission to edit products.', 'spread-em' ) ], 403 );
 		}
 
-		$session_id = isset( $_POST['session_id'] ) ? sanitize_key( wp_unslash( $_POST['session_id'] ) ) : '';
-		$product_id = isset( $_POST['product_id'] ) ? absint( $_POST['product_id'] ) : 0;
-		$mode       = isset( $_POST['mode'] ) ? sanitize_key( wp_unslash( $_POST['mode'] ) ) : 'update';
-		$key        = isset( $_POST['key'] ) ? (string) wp_unslash( $_POST['key'] ) : '';
-		$value      = isset( $_POST['value'] ) ? (string) wp_unslash( $_POST['value'] ) : '';
+		$session_id        = isset( $_POST['session_id'] ) ? sanitize_key( wp_unslash( $_POST['session_id'] ) ) : '';
+		$product_id        = isset( $_POST['product_id'] ) ? absint( $_POST['product_id'] ) : 0;
+		$mode              = isset( $_POST['mode'] ) ? sanitize_key( wp_unslash( $_POST['mode'] ) ) : 'update';
+		$key               = isset( $_POST['key'] ) ? (string) wp_unslash( $_POST['key'] ) : '';
+		$value             = isset( $_POST['value'] ) ? (string) wp_unslash( $_POST['value'] ) : '';
+		$client_request_id = isset( $_POST['client_request_id'] ) ? sanitize_key( wp_unslash( $_POST['client_request_id'] ) ) : '';
 
 		$key = sanitize_text_field( $key );
 
@@ -207,6 +208,20 @@ class SpreadEm_Ajax {
 		}
 
 		$state = self::get_live_state( $session_id );
+
+		// Idempotency: skip already-processed requests so retries don't duplicate activity events.
+		if ( '' !== $client_request_id ) {
+			$seen = isset( $state['seen_request_ids'] ) && is_array( $state['seen_request_ids'] )
+				? $state['seen_request_ids']
+				: [];
+
+			if ( in_array( $client_request_id, $seen, true ) ) {
+				wp_send_json_success( [ 'version' => isset( $state['version'] ) ? (int) $state['version'] : 0 ] );
+			}
+
+			$seen[]                     = $client_request_id;
+			$state['seen_request_ids']  = array_slice( $seen, -50 );
+		}
 
 		if ( ! isset( $state['cells'] ) || ! is_array( $state['cells'] ) ) {
 			$state['cells'] = [];
