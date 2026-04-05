@@ -20,6 +20,7 @@ $GLOBALS['spread_em_test_state'] = [
     'options' => [],
     'user_meta' => [],
     'current_user_id' => 1,
+    'transients' => [],
 ];
 
 if (!function_exists('apply_filters')) {
@@ -66,6 +67,26 @@ if (!function_exists('get_user_meta')) {
         }
 
         return $GLOBALS['spread_em_test_state']['user_meta'][$user_id][$key];
+    }
+}
+
+if (!function_exists('get_transient')) {
+    function get_transient(string $key) {
+        return $GLOBALS['spread_em_test_state']['transients'][$key] ?? false;
+    }
+}
+
+if (!function_exists('set_transient')) {
+    function set_transient(string $key, $value, int $expiration = 0): bool {
+        $GLOBALS['spread_em_test_state']['transients'][$key] = $value;
+        return true;
+    }
+}
+
+if (!function_exists('delete_transient')) {
+    function delete_transient(string $key): bool {
+        unset($GLOBALS['spread_em_test_state']['transients'][$key]);
+        return true;
     }
 }
 

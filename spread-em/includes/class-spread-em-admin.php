@@ -138,11 +138,13 @@ class SpreadEm_Admin {
 				'products' => $products,
 				'columns'  => $columns,
 				'live'     => [
-					'enabled'       => true,
-					'session_id'    => $session_id,
-					'nonce'         => wp_create_nonce( 'spread_em_live_nonce' ),
-					'poll_interval' => 2500,
-					'full_workspace' => $full_workspace,
+					'enabled'              => true,
+					'session_id'           => $session_id,
+					'nonce'                => wp_create_nonce( 'spread_em_live_nonce' ),
+					'poll_interval'        => 10000,
+					'poll_hidden_interval' => 30000,
+					'debounce_ms'          => 500,
+					'full_workspace'       => $full_workspace,
 				],
 				'current_user' => [
 					'id'   => get_current_user_id(),
