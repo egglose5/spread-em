@@ -431,7 +431,7 @@ class SpreadEm_Ajax {
 		$client_req_id   = isset( $_POST['client_request_id'] ) ? sanitize_key( wp_unslash( $_POST['client_request_id'] ) ) : '';
 		$product_id      = isset( $_POST['product_id'] ) ? absint( $_POST['product_id'] ) : 0;
 		$key             = isset( $_POST['key'] ) ? sanitize_text_field( wp_unslash( $_POST['key'] ) ) : '';
-		$value           = isset( $_POST['value'] ) ? (string) wp_unslash( $_POST['value'] ) : '';
+		$value           = isset( $_POST['value'] ) ? sanitize_textarea_field( wp_unslash( $_POST['value'] ) ) : '';
 
 		if ( '' === $session_id || '' === $client_req_id || ! $product_id || '' === $key || 'id' === $key ) {
 			wp_send_json_error( [ 'message' => __( 'Invalid draft payload.', 'spread-em' ) ], 400 );

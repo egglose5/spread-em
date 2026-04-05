@@ -102,6 +102,12 @@ if (!function_exists('sanitize_text_field')) {
     }
 }
 
+if (!function_exists('sanitize_textarea_field')) {
+    function sanitize_textarea_field(string $value): string {
+        return trim($value);
+    }
+}
+
 if (!function_exists('absint')) {
     function absint($value): int {
         return abs((int) $value);

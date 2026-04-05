@@ -66,7 +66,8 @@
 	let liveVersion = 0;
 	let draftToken = 0;
 	let livePollTimer = null;
-	let saveDraftTimer = null;
+	/** Per-cell debounce timers keyed by "productId:key". */
+	const saveDraftTimers = {};
 	let isApplyingRemote = false;
 	let activePresence = {};
 	let directMessages = [];
@@ -463,7 +464,9 @@
 	 * ---------------------------------------------------------------------- */
 
 	function startLiveSessionSync() {
-		// Initial full fetch.
+		// Initial full fetch for presence / IM / activity (heavier, less frequent).
+		// pollDraft() handles lightweight cell-delta polling separately via
+		// scheduleDraftPoll() below.
 		pullLiveState( true );
 		scheduleDraftPoll();
 
@@ -514,9 +517,10 @@
 	/**
 	 * Debounced draft save.
 	 *
-	 * Each call resets a 500 ms timer so rapid keystrokes collapse into a
-	 * single AJAX request.  A stable client_request_id is captured at the
-	 * moment the timer fires so retries on network failure are idempotent.
+	 * Each (productId, key) pair has its own debounce timer so that concurrent
+	 * edits to different cells within the window are never lost.  The UUID is
+	 * captured before the timer fires so that any automatic retry of the same
+	 * debounced batch uses the identical client_request_id, ensuring idempotency.
 	 *
 	 * @param {number} rowIndex  Row index in currentData.
 	 * @param {string} key       Column key.
@@ -534,16 +538,20 @@
 			return;
 		}
 
-		// Reset debounce timer on every change within the window.
-		if ( saveDraftTimer ) {
-			clearTimeout( saveDraftTimer );
+		// Use a per-cell key so concurrent edits on different cells don't cancel
+		// each other's pending save.
+		const cellKey = productId + ':' + key;
+
+		if ( saveDraftTimers[ cellKey ] ) {
+			clearTimeout( saveDraftTimers[ cellKey ] );
 		}
 
-		// Capture a stable UUID for this debounced batch.
+		// Capture a stable UUID now (outside the timer) so retries of this
+		// exact debounced batch always carry the same client_request_id.
 		const clientRequestId = generateUUID();
 
-		saveDraftTimer = window.setTimeout( function () {
-			saveDraftTimer = null;
+		saveDraftTimers[ cellKey ] = window.setTimeout( function () {
+			delete saveDraftTimers[ cellKey ];
 			$.post(
 				spreadEmData.ajax_url,
 				{
